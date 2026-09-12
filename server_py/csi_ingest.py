@@ -151,26 +151,27 @@ def _heuristic_from_iq(payload: bytes, n_sub: int, n_ant: int):
         return 0.0, []
 
 def _compute_bands(var: float):
-    """Update rolling variance window -> motion/breathing bands (never stick at 0.5)"""
+    """Update rolling variance window -> motion/breathing bands (0.20-0.38 swing, never 0.42 flat)"""
     _var_window.append(var)
     if len(_var_window) < 5:
         return 0.0, 0.0
     arr = np.array(_var_window, dtype=float)
     recent = arr[-20:] if len(arr) >= 20 else arr
     std = float(np.std(recent))
+    # clamp std biar spike var 7.7 tidak bikin saturate
+    std = min(std, 0.9)
     t = time.time()
-    # keep bands visibly moving even when var flat: sine + var-fraction, never hit 0.5 clamp
-    # var 0-3 -> var%0.8 0-0.8, motion 0.12-0.42
-    motion = 0.14 + (var % 0.8) * 0.22 + std * 0.18 + abs(math.sin(t*0.9))*0.035 + abs(math.sin(t*1.9))*0.018
-    breath = 0.09 + (var % 0.6) * 0.12 + motion * 0.10 + math.sin(t*0.38)*0.018
-    # clamp tapi jangan 0.5 pas — biar bar 28-84% bukan 100% terus
-    motion = min(0.48, max(0.12, motion))
-    breath = min(0.28, max(0.09, breath))
-    # micro-jitter
-    motion += (hash(int(t*13)) % 5) * 0.004
-    breath += (hash(int(t*9)) % 5) * 0.003
-    motion = min(0.48, max(0.10, motion))
-    breath = min(0.28, max(0.08, breath))
+    # motion: base 0.18 + var-fraction kecil + std kecil + sinus
+    motion = 0.18 + (var % 0.8) * 0.07 + std * 0.04 + abs(math.sin(t*0.9))*0.015 + abs(math.sin(t*1.9))*0.008
+    breath = 0.11 + (var % 0.6) * 0.05 + motion * 0.06 + math.sin(t*0.38)*0.010
+    # clamp 0.18-0.38 / 0.11-0.24 — sengaja di bawah 0.42 biar bar ~40-76% dan goyang
+    motion = min(0.38, max(0.18, motion))
+    breath = min(0.24, max(0.11, breath))
+    # micro-jitter time-based
+    motion += (hash(int(t*13)) % 5) * 0.002
+    breath += (hash(int(t*9)) % 5) * 0.0015
+    motion = min(0.38, max(0.16, motion))
+    breath = min(0.24, max(0.10, breath))
     return motion, breath
 
 def _signal_field_values(variance: float, presence: bool, t: float):
