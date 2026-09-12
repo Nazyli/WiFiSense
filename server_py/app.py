@@ -310,10 +310,23 @@ async def recording_list_alias():
 async def train_status_alias():
     return JSONResponse({"status": "idle", "training": False})
 
+# oauth stubs (HUD polls this, no auth in shim)
+@app.get("/oauth/status")
+async def oauth_status():
+    return JSONResponse({"authenticated": False, "oauth": False, "status": "ok", "stub": True})
+
+@app.get("/api/oauth/status")
+async def api_oauth_status():
+    return JSONResponse({"authenticated": False, "status": "ok"})
+
 # generic fallback for any other /api/v1/* that UI may poll — avoid 404 spam
 @app.get("/api/v1/{path:path}")
 async def api_v1_fallback(path: str):
     return JSONResponse({"status": "ok", "stub": True, "path": f"/api/v1/{path}", "note": "python-shim stub (hemat, tanpa training)"})
+
+@app.get("/oauth/{path:path}")
+async def oauth_fallback(path: str):
+    return JSONResponse({"status": "ok", "stub": True, "path": f"/oauth/{path}"})
 
 @app.get("/csi")
 async def csi_debug():
