@@ -39,11 +39,21 @@ xcopy build\partition_table\partition-table.bin ..\..\firmware\ /Y
 xcopy build\esp32-csi-node.bin ..\..\firmware\firmware.bin /Y
 ```
 
-### Opsi 2 — ESP32-CSI-Tool (alternatif)
+### Opsi 2 — ESP32-CSI-Tool / esp-csi (prebuilt) — STATUS 2026-09-13: TIDAK ADA PREBUILT
 
-https://github.com/Steven063/ESP32-CSI-Tool
+> **Update 2026-09-13 @fixer:** Prebuilt ~2MB **tidak tersedia**. Repo `Steven063/ESP32-CSI-Tool` salah eja (404). Yang benar `StevenMHernandez/ESP32-CSI-Tool` → 0 releases. `espressif/esp-csi` juga 0 releases. `ruvnet/RuView` 30 releases tapi assets 0. Lihat `DOWNLOAD_LOG.md` & `READY.md`.
 
-Sudah ada binary rilis untuk S3.
+- Repo benar: https://github.com/StevenMHernandez/ESP32-CSI-Tool (source only, `active_ap` / `active_sta` / `passive` — build via ESP-IDF)
+- Alternatif Espressif: https://github.com/espressif/esp-csi (source `examples/get-started/csi_recv_router`, `console_test` — sudah ter-cache sebagai `firmware/esp-csi-master.zip` 25MB SHA256 D3EBAB4E...)
+- Jika kelak ada release, download `.bin` dan drop ke `firmware/merged.bin`, lalu:
+  ```powershell
+  Get-FileHash firmware\merged.bin -Algorithm SHA256
+  python -m esptool --chip esp32s3 image-info firmware\merged.bin
+  .\scripts\flash.ps1 -Port COM4 -Merged
+  ```
+  Detail lengkap: `docs/OPSI-B-DOWNLOAD.md`
+
+**Saat ini:** `firmware/merged.bin` adalah placeholder 4KB (SHA256 B158A2CB...) — **jangan flash**. Hapus & ganti dengan binary asli >1MB sebelum flash. Status `READY.md` = 🔴 NOT READY.
 
 ### Opsi 3 — Download manual (jika git gagal)
 
@@ -59,14 +69,25 @@ Atau via git di PowerShell:
 git clone --depth 1 https://github.com/ruvnet/RuView.git _ruview
 ```
 
-## Flash
+## Flash (COM4 — MAC <YOUR_DEVICE_MAC>, 16MB flash / 8MB PSRAM)
+
+Cek port dulu (bisa pindah COM3 setelah hard reset):
+
+```powershell
+[System.IO.Ports.SerialPort]::getPortNames()
+python -m esptool --chip esp32s3 --port COM4 chip-id  # harus ESP32-S3 MAC <YOUR_DEVICE_MAC>
+```
 
 Lihat `scripts/flash.ps1`:
 
 ```powershell
-.\scripts\flash.ps1 -Port COM3          # 3-file
-.\scripts\flash.ps1 -Port COM3 -Merged  # merged.bin
+.\scripts\flash.ps1 -Port COM4          # 3-file (bootloader 0x0, partition 0x8000, firmware 0x10000)
+.\scripts\flash.ps1 -Port COM4 -Merged  # merged.bin 0x0 (recommended jika sudah punya merged.bin)
+# jika COM4 hilang: .\scripts\flash.ps1 -Port COM3 -Merged -Baud 115200
+# tahan BOOT + tap RESET jika "Connecting..."
 ```
+
+> SSID `FLAMBOYAN'S` mengandung `'` — di `menuconfig` dan PowerShell wajib kutip ganda `"FLAMBOYAN'S"` (password `<YOUR_WIFI_PASSWORD>`). Status placeholder lihat `firmware/READY.md`, log download lihat `firmware/DOWNLOAD_LOG.md`, langkah manual Opsi B lihat `docs/OPSI-B-DOWNLOAD.md`.
 
 ## Cat clone gagal
 
