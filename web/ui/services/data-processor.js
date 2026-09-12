@@ -59,7 +59,34 @@ export class DataProcessor {
           result.metadata.sensingMode = 'CSI';
         }
       }
-    }
+     } else if (message.type === 'sensing_update') {
+      // Python shim live stream (viz.html via 3001) — map to same viz format
+      // Build 1 dummy person from presence/classification so body moves on real CSI
+      const isLive = message._simulated === false || message.source === 'esp32';
+      if (message.presence) {
+        // tiny sway driven by variance so figure visibly moves without real pose model
+        const t = Date.now() * 0.001;
+        const sway = (message.variance || 0) * 0.015 + Math.sin(t*0.7)*0.015;
+        const base = [
+          [0.50,0.12],[0.48,0.10],[0.52,0.10],[0.46,0.12],[0.54,0.12],
+          [0.42,0.22],[0.58,0.22],[0.38,0.38],[0.62,0.38],[0.36,0.52],[0.64,0.52],
+          [0.45,0.50],[0.55,0.50],[0.44,0.70],[0.56,0.70],[0.44,0.90],[0.56,0.90],
+        ];
+        const conf = Math.min(0.9, 0.45 + (message.confidence||0)*0.3 + (message.variance||0)*0.05);
+        const kps = base.map(([x,y],i) => ({ x: x+sway+Math.sin(t*0.6+i*0.4)*0.006, y: y+Math.sin(t*0.55+i*0.32)*0.005, confidence: conf }));
+        result.persons = [{ id: 'live_0', confidence: conf, keypoints: kps, bbox: [0.35,0.05,0.30,0.90], body_parts: null }];
+        result.zoneOccupancy = { default: 1 };
+        result.signalData = message.signal_field ? { amplitude: message.signal_field.values } : null;
+        result.metadata.isRealData = isLive;
+        result.metadata.timestamp = message.timestamp;
+        result.metadata.sensingMode = isLive ? 'CSI' : 'Mock';
+      } else {
+        result.persons = [];
+        result.zoneOccupancy = {};
+        result.metadata.isRealData = isLive;
+        result.metadata.sensingMode = isLive ? 'CSI' : 'Mock';
+      }
+     }
 
     return result;
   }
