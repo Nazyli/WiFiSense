@@ -256,6 +256,21 @@ async def pose_current_alias():
 async def pose_stats_alias(hours: int = 1):
     return JSONResponse({"hours": hours, "stats": {"frames": csi_ingest.get_stats().get("count", 0)}, "pose": csi_ingest.build_pose_stub()})
 
+@app.get("/api/v1/pose/zones/summary")
+async def pose_zones_summary():
+    s = csi_ingest.build_pose_stub()
+    return JSONResponse({"zones": {"default": {"count": 1, "presence": s["payload"]["classification"]["presence"]}}, "summary": s, "source": "esp32" if csi_ingest.is_live() else "simulated"})
+
+@app.get("/api/v1/pose/zones")
+async def pose_zones():
+    s = csi_ingest.build_pose_stub()
+    return JSONResponse({"zones": ["default"], "counts": {"default": 1}, "pose": s})
+
+@app.get("/api/pose/zones/summary")
+async def pose_zones_summary_alias():
+    s = csi_ingest.build_pose_stub()
+    return JSONResponse({"zones": {"default": {"count": 1, "presence": s["payload"]["classification"]["presence"]}}, "summary": s})
+
 # additional model endpoints for ModelPanel (stubs returning empty so UI doesn't error)
 @app.get("/api/v1/models")
 async def list_models():
