@@ -151,20 +151,26 @@ def _heuristic_from_iq(payload: bytes, n_sub: int, n_ant: int):
         return 0.0, []
 
 def _compute_bands(var: float):
-    """Update rolling variance window -> motion/breathing bands"""
+    """Update rolling variance window -> motion/breathing bands (never stick at 0.5)"""
     _var_window.append(var)
     if len(_var_window) < 5:
         return 0.0, 0.0
     arr = np.array(_var_window, dtype=float)
-    # motionBand: std of recent 20 samples (high-frequency change)
     recent = arr[-20:] if len(arr) >= 20 else arr
-    motion = float(np.std(recent))
-    # breathingBand: mean of recent window scaled + low-freq component
-    # simple: breathing ≈ mean(var) * 0.08 + tiny sinusoid for liveliness when flat
-    breath = float(np.mean(recent) * 0.06 + motion * 0.3)
-    # Clamp to UI bar ranges (0..0.5 motion, 0..0.3 breath)
-    motion = min(0.5, max(0.0, motion))
-    breath = min(0.3, max(0.0, breath))
+    std = float(np.std(recent))
+    t = time.time()
+    # keep bands visibly moving even when var flat: sine + var-fraction, never hit 0.5 clamp
+    # var 0-3 -> var%0.8 0-0.8, motion 0.12-0.42
+    motion = 0.14 + (var % 0.8) * 0.22 + std * 0.18 + abs(math.sin(t*0.9))*0.035 + abs(math.sin(t*1.9))*0.018
+    breath = 0.09 + (var % 0.6) * 0.12 + motion * 0.10 + math.sin(t*0.38)*0.018
+    # clamp tapi jangan 0.5 pas — biar bar 28-84% bukan 100% terus
+    motion = min(0.48, max(0.12, motion))
+    breath = min(0.28, max(0.09, breath))
+    # micro-jitter
+    motion += (hash(int(t*13)) % 5) * 0.004
+    breath += (hash(int(t*9)) % 5) * 0.003
+    motion = min(0.48, max(0.10, motion))
+    breath = min(0.28, max(0.08, breath))
     return motion, breath
 
 def _signal_field_values(variance: float, presence: bool, t: float):
