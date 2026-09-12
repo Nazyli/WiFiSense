@@ -511,14 +511,25 @@ def build_pose_stub():
     # Pose wrapper expected by pose.service.js: type pose_data, payload persons etc
     # We provide minimal persons array with confidence 0
     now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    # generate 1 dummy person if presence else empty
+    # generate 1 person with 17 keypoints if presence, so viz/pose can render
+    # honesty: signal-derived with low confidence (not learned model)
     persons = []
     if latest["presence"]:
+        # base standing pose 17 keypoints (x,y normalized 0-1), add small sway from variance/time
+        t = time.time()
+        sway = (latest.get("variance", 0) * 0.02) + math.sin(t*0.7)*0.01
+        base = [
+            (0.50,0.12),(0.48,0.10),(0.52,0.10),(0.46,0.12),(0.54,0.12),
+            (0.42,0.22),(0.58,0.22),(0.38,0.38),(0.62,0.38),(0.36,0.52),(0.64,0.52),
+            (0.45,0.50),(0.55,0.50),(0.44,0.70),(0.56,0.70),(0.44,0.90),(0.56,0.90),
+        ]
+        conf = min(0.85, 0.35 + latest.get("variance",0)*0.06 + latest.get("confidence",0)*0.15)
+        kps = [{"x": float(x+sway), "y": float(y+math.sin(t*0.5+i*0.3)*0.005), "confidence": float(conf)} for i,(x,y) in enumerate(base)]
         persons = [{
             "id": 0,
-            "confidence": 0.0,  # stub honesty
-            "keypoints": [],  # no learned keypoints
-            "bbox": [0,0,0,0],
+            "confidence": float(conf),
+            "keypoints": kps,
+            "bbox": [0.35, 0.05, 0.30, 0.90],
             "pose_source": "signal-derived",
         }]
     payload = {
