@@ -233,6 +233,29 @@ async def vital_signs_snake():
 async def model_info():
     return JSONResponse(_model_info_payload())
 
+# --- pose REST stubs (UI polls these; WS is primary) ---
+@app.get("/api/v1/pose/current")
+async def pose_current():
+    return JSONResponse(csi_ingest.build_pose_stub())
+
+@app.get("/api/v1/pose/stats")
+async def pose_stats(hours: int = 1):
+    # stub stats; hours param from ?hours=1
+    return JSONResponse({"hours": hours, "stats": {"frames": csi_ingest.get_stats().get("count", 0)}, "pose": csi_ingest.build_pose_stub(), "source": "esp32" if csi_ingest.is_live() else "simulated"})
+
+@app.get("/api/v1/pose/history")
+async def pose_history(limit: int = 50):
+    return JSONResponse({"history": [csi_ingest.build_pose_stub()], "limit": limit})
+
+# aliases without /v1 for older UI builds
+@app.get("/api/pose/current")
+async def pose_current_alias():
+    return JSONResponse(csi_ingest.build_pose_stub())
+
+@app.get("/api/pose/stats")
+async def pose_stats_alias(hours: int = 1):
+    return JSONResponse({"hours": hours, "stats": {"frames": csi_ingest.get_stats().get("count", 0)}, "pose": csi_ingest.build_pose_stub()})
+
 # additional model endpoints for ModelPanel (stubs returning empty so UI doesn't error)
 @app.get("/api/v1/models")
 async def list_models():
