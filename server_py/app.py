@@ -284,6 +284,37 @@ async def active_model():
 async def lora_profiles():
     return JSONResponse({"profiles": []})
 
+# training / recording stubs (TrainingPanel polls these)
+@app.get("/api/v1/recording/list")
+async def recording_list():
+    return JSONResponse({"recordings": [], "total": 0})
+
+@app.get("/api/v1/recording/status")
+async def recording_status():
+    return JSONResponse({"recording": False, "count": 0})
+
+@app.get("/api/v1/train/status")
+async def train_status():
+    return JSONResponse({"status": "idle", "training": False, "progress": 0, "epoch": 0})
+
+@app.get("/api/v1/training/status")
+async def training_status_alias():
+    return JSONResponse({"status": "idle", "training": False, "progress": 0})
+
+# aliases without /v1
+@app.get("/api/recording/list")
+async def recording_list_alias():
+    return JSONResponse({"recordings": []})
+
+@app.get("/api/train/status")
+async def train_status_alias():
+    return JSONResponse({"status": "idle", "training": False})
+
+# generic fallback for any other /api/v1/* that UI may poll — avoid 404 spam
+@app.get("/api/v1/{path:path}")
+async def api_v1_fallback(path: str):
+    return JSONResponse({"status": "ok", "stub": True, "path": f"/api/v1/{path}", "note": "python-shim stub (hemat, tanpa training)"})
+
 @app.get("/csi")
 async def csi_debug():
     latest = csi_ingest.get_latest()
