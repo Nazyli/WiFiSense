@@ -517,14 +517,17 @@ def build_pose_stub():
     if latest["presence"]:
         # base standing pose 17 keypoints (x,y normalized 0-1), add small sway from variance/time
         t = time.time()
-        sway = (latest.get("variance", 0) * 0.02) + math.sin(t*0.7)*0.01
+        var = float(latest.get("variance", 0))
+        # sway lebih keliatan: 0.02-0.05 + variance*0.03
+        sway = var*0.03 + math.sin(t*0.7)*0.022 + math.sin(t*0.3)*0.008
         base = [
             (0.50,0.12),(0.48,0.10),(0.52,0.10),(0.46,0.12),(0.54,0.12),
             (0.42,0.22),(0.58,0.22),(0.38,0.38),(0.62,0.38),(0.36,0.52),(0.64,0.52),
             (0.45,0.50),(0.55,0.50),(0.44,0.70),(0.56,0.70),(0.44,0.90),(0.56,0.90),
         ]
-        conf = min(0.85, 0.35 + latest.get("variance",0)*0.06 + latest.get("confidence",0)*0.15)
-        kps = [{"x": float(x+sway), "y": float(y+math.sin(t*0.5+i*0.3)*0.005), "confidence": float(conf)} for i,(x,y) in enumerate(base)]
+        # confidence goyang biar HUD keliatan gerak: base 0.42 + variance*0.08 + sinus 0.07
+        conf = min(0.88, 0.42 + var*0.08 + math.sin(t*0.85)*0.07 + math.sin(t*1.6)*0.03)
+        kps = [{"x": float(x+sway+math.sin(t*0.6+i*0.4)*0.008), "y": float(y+math.sin(t*0.55+i*0.32)*0.007), "confidence": float(conf)} for i,(x,y) in enumerate(base)]
         persons = [{
             "id": 0,
             "confidence": float(conf),
