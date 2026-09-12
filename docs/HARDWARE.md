@@ -73,17 +73,33 @@ Harus ada COM baru. Jika tidak:
 
 ## Flash & Monitor
 
-Lihat `scripts/flash.ps1` dan `scripts/monitor.ps1`.
+Lihat `scripts/flash.ps1`, `scripts/monitor.ps1`, dan `firmware/ESP32_VERIFY.md` (verifikasi akhir lane ESP32).
 
-Ringkasan command manual:
+Ringkasan command manual — **4-file RuView bundle** (preserve NVS, offset valid untuk chip 16MB fisik dengan bundle 8MB):
 
 ```powershell
-# flash 3-file
-python -m esptool --chip esp32s3 --port COM3 --baud 460800 --before default_reset --after hard_reset write_flash -z --flash_mode dio --flash_freq 80m --flash_size detect 0x0 bootloader.bin 0x8000 partition-table.bin 0x10000 firmware.bin
+# flash 4-file (recommended, valid untuk COM4 MAC <YOUR_DEVICE_MAC>)
+python -m esptool --chip esp32s3 --port COM4 --baud 460800 --before default_reset --after hard_reset write_flash -z --flash_mode dio --flash_freq 80m --flash_size detect `
+  0x0000 firmware\bootloader.bin `
+  0x8000 firmware\partition-table.bin `
+  0xf000 firmware\ota_data_initial.bin `
+  0x20000 firmware\esp32-csi-node.bin
+
+# alternatif eksplisit 8MB (jika esptool detect 16MB tapi bundle 8MB — jangan paksa 16MB):
+# python -m esptool --chip esp32s3 --port COM4 --baud 460800 --flash_size 8MB write_flash --flash_mode dio --flash_freq 80m 0x0000 ... 0x20000 ...
+
+# via script
+.\scripts\flash.ps1 -Port COM4
+# jika COM4 pindah setelah CDC reset:
+.\scripts\flash.ps1 -Port COM3 -Baud 115200
 
 # monitor
-python -m serial.tools.miniterm COM3 115200 --raw
+.\scripts\monitor.ps1 -Port COM4 -Baud 115200
+# atau
+python -m serial.tools.miniterm COM4 115200 --raw
 ```
+
+> Offset lama `0x10000` (3-file tanpa `ota_data_initial`) hanya untuk build custom non-RuView; untuk lane ini pakai `0x20000` + `0xf000` sesuai `firmware/READY.md:34-38` & `firmware/ESP32_VERIFY.md §5`. `scripts/flash.ps1` default 3-file akan di-merge ke 4-file di iterasi berikutnya — sementara pakai command 4-file manual di atas.
 
 ## Tips Router 2.4GHz
 
