@@ -66,3 +66,10 @@ captures/
 # Secrets
 secrets.txt
 wifi_config.h
+
+# firmware cache - jangan commit binary/cache besar
+firmware/*.zip
+firmware/esp-csi-tmp/
+firmware/merged.bin
+firmware/*.bin
+
