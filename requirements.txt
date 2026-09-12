@@ -20,5 +20,10 @@ pyyaml>=6.0
 tqdm>=4.65
 websockets>=12.0
 
+# Shim Python BE (FastAPI) - untuk banner hijau LIVE-ESP32 tanpa Rust
+fastapi>=0.110
+uvicorn[standard]>=0.29
+python-multipart>=0.0.9
+
 # Untuk parsing CSI / serial bridge
 pyserial-asyncio>=0.6 ; sys_platform != "win32"
