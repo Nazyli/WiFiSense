@@ -73,3 +73,9 @@ firmware/esp-csi-tmp/
 firmware/merged.bin
 firmware/*.bin
 
+
+# RuView bundle zip (jangan commit binary besar)
+esp32-csi-node-*.zip
+*.zip
+!docs/*.zip
+
