@@ -79,3 +79,8 @@ esp32-csi-node-*.zip
 *.zip
 !docs/*.zip
 
+# WiFiSense FE vendored UI - DI-COMMIT (jangan ignore)
+!web/
+!web/ui/
+!web/ui/**
+
