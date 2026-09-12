@@ -1,0 +1,24 @@
+# WiFiSense - minimal deps untuk CSI (tanpa Docker)
+# Install: pip install -r requirements.txt
+
+# Flash & serial
+esptool>=4.8
+pyserial>=3.5
+
+# Data & ML minimal
+numpy>=1.24
+scipy>=1.10
+matplotlib>=3.7
+
+# Model hub (untuk download pretrained RuView weights)
+huggingface_hub>=0.20
+
+# Opsional tapi berguna
+pandas>=2.0
+scikit-learn>=1.3
+pyyaml>=6.0
+tqdm>=4.65
+websockets>=12.0
+
+# Untuk parsing CSI / serial bridge
+pyserial-asyncio>=0.6 ; sys_platform != "win32"
