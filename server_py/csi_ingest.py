@@ -142,20 +142,39 @@ def _parse_nvs_csv(path: Path) -> dict:
         return {}
 
 def _load_provision_state() -> dict:
-    """Scan provision state dir for first json containing ssid/target_ip."""
-    # Check nvs csv candidates first
+    """Scan provision state dir for first json containing ssid/target_ip.
+
+    Merge strategy (fix header ssid empty bug):
+    - nvs_config.csv may have ssid="" but target_ip present (e.g. nvs_config.csv:3).
+      Previous logic short-circuited on `d.get("ssid") or d.get("target_ip")` and returned
+      {"ssid":""}, never reading COM4.json which holds the real ssid "X".
+    - Now: collect csv_data and json_data separately, then merge:
+      ssid = csv ssid if truthy (stripped) else json ssid
+      target_ip = csv target_ip if truthy else json target_ip/targetIp
+      target_port = csv target_port if truthy else json target_port/targetPort
+      This keeps _FALLBACK_SSID="" (no hardcode) but header gets dynamic "X".
+    """
+    # --- 1) collect nvs csv data (first candidate with any key) ---
+    csv_data: dict = {}
     for p in _NVS_CANDIDATES:
         if p.is_file():
             d = _parse_nvs_csv(p)
-            if d.get("ssid") or d.get("target_ip"):
-                # normalize keys
-                return {
-                    "ssid": d.get("ssid"),
-                    "target_ip": d.get("target_ip"),
-                    "target_port": d.get("target_port"),
-                }
-    # Fallback scan provision state dir
-    # allow override via env STATE_DIR
+            # normalize: strip strings, keep empty as ""
+            ssid_raw = d.get("ssid")
+            tip_raw = d.get("target_ip")
+            tport_raw = d.get("target_port")
+            ssid = str(ssid_raw).strip() if ssid_raw is not None else ""
+            tip = str(tip_raw).strip() if tip_raw is not None else ""
+            tport = str(tport_raw).strip() if tport_raw is not None else ""
+            # remember if file had any relevant key, even if ssid empty
+            if ssid or tip or tport or d:
+                # store normalized; keep empty ssid to allow merge fallback
+                csv_data = {"ssid": ssid, "target_ip": tip, "target_port": tport}
+                # don't return early — need to attempt json merge for ssid fallback
+                break
+
+    # --- 2) collect provision json data (prefer COM4.json) ---
+    json_data: dict = {}
     candidates_dirs = []
     env_dir = os.getenv("STATE_DIR") or os.getenv("PROVISION_STATE_DIR")
     if env_dir:
@@ -183,12 +202,71 @@ def _load_provision_state() -> dict:
                 try:
                     with open(fp, "r", encoding="utf-8") as fh:
                         data = json.load(fh)
-                    if isinstance(data, dict) and (data.get("ssid") or data.get("target_ip")):
-                        return data
+                    if isinstance(data, dict) and (data.get("ssid") or data.get("target_ip") or data.get("targetIp") or data.get("target_port") or data.get("targetPort")):
+                        json_data = data
+                        break
                 except Exception:
                     continue
+            if json_data:
+                break
         except Exception:
             continue
+
+    # --- 3) merge: csv truthy takes precedence, else json fallback ---
+    if csv_data or json_data:
+        # ssid: csv if non-empty stripped, else json
+        csv_ssid = (csv_data.get("ssid") or "").strip()
+        json_ssid = str(json_data.get("ssid") or "").strip()
+        ssid = csv_ssid if csv_ssid else json_ssid
+
+        # target_ip: csv else json (support camelCase)
+        csv_tip = (csv_data.get("target_ip") or "").strip()
+        json_tip = ""
+        for k in ("target_ip", "targetIp"):
+            v = json_data.get(k)
+            if v is not None and str(v).strip():
+                json_tip = str(v).strip()
+                break
+        target_ip = csv_tip if csv_tip else json_tip
+
+        # target_port: csv else json
+        csv_tport = (csv_data.get("target_port") or "").strip()
+        json_tport = ""
+        for k in ("target_port", "targetPort"):
+            v = json_data.get(k)
+            if v is not None and str(v).strip():
+                json_tport = str(v).strip()
+                break
+        target_port = csv_tport if csv_tport else json_tport
+
+        merged: dict = {}
+        # always store ssid (may be "" if both empty) so get_ssid() returns correctly
+        merged["ssid"] = ssid
+        if target_ip:
+            merged["target_ip"] = target_ip
+        elif csv_tip or json_tip:
+            merged["target_ip"] = target_ip
+        if target_port:
+            merged["target_port"] = target_port
+        # also propagate json camelCase mirror for compatibility
+        if json_data.get("targetIp") and not merged.get("target_ip"):
+            merged["target_ip"] = str(json_data.get("targetIp")).strip()
+        if json_data.get("targetPort") and not merged.get("target_port"):
+            merged["target_port"] = str(json_data.get("targetPort")).strip()
+
+        # if any merged value is truthy, return it; this ensures ssid "X" from json is not lost
+        if merged.get("ssid") or merged.get("target_ip") or merged.get("target_port"):
+            return merged
+        # fallback: if csv had only empty ssid but json had ssid, merged already has it
+        # if still empty, return merged anyway to avoid losing json ssid
+        if json_ssid or target_ip or target_port:
+            return merged
+
+    # no csv/json found -> empty
+    if json_data:
+        return json_data
+    if csv_data:
+        return csv_data
     return {}
 
 def get_ssid() -> str:
