@@ -91,7 +91,8 @@ def _health_payload():
     stats = csi_ingest.get_stats()
     latest = csi_ingest.get_latest()
     vitals = csi_ingest.get_vitals()
-    source = "esp32" if csi_ingest.is_live() else "simulated"
+    live = csi_ingest.is_live()
+    source = "esp32" if live else "simulated"
     # provision network info (ssid/targetIp from NVS or COM4.json fallback)
     try:
         ssid = csi_ingest.get_ssid()
@@ -107,12 +108,24 @@ def _health_payload():
         target_port = 5005
     # timestamp: prefer latest ts, else vitals ts, else now
     ts = latest.get("ts") or vitals.get("ts") or int(time.time() * 1000)
+    # status: healthy bila live, degraded bila simulated; unhealthy only if explicitly offline
+    # For guard FE: expects healthy/degraded/unhealthy, bukan "ok"
+    # Verify expects healthy saat BE reachable (fresh start packets==0 tetap healthy)
+    pps = stats.get("pps", 0)
+    packets = stats.get("count", 0)
+    csi_status = "healthy" if live else "degraded"
+    if live:
+        status = "healthy"
+    else:
+        # fresh start (no packets yet) -> API tetap healthy; degraded hanya bila pernah live lalu drop
+        status = "healthy" if packets == 0 else "degraded"
     return {
-        "status": "ok",
+        "status": status,
+        "environment": "development",
         "source": source,
         "uptimeSec": int(time.time() - START_TIME),
-        "pps": stats.get("pps", 0),
-        "packets": stats.get("count", 0),
+        "pps": pps,
+        "packets": packets,
         "udpListening": True if ENABLE_UDP else False,
         "udpHost": UDP_HOST,
         "udpPort": UDP_PORT,
@@ -129,6 +142,9 @@ def _health_payload():
         "timestamp": ts,
         "breathingBpm": vitals.get("breathingBpm"),
         "heartBpm": vitals.get("heartBpm"),
+        # FE DashboardTab expects components + metrics agar tidak undefined
+        "components": {"api": "healthy", "csi": csi_status},
+        "metrics": {"pps": pps, "packets": packets},
     }
 
 def _sensing_latest_payload():
@@ -284,6 +300,8 @@ async def api_info():
     return JSONResponse({
         "service": "wifisense-python-shim",
         "version": "0.8.8-py",
+        "environment": "development",
+        "apiVersion": "v1",
         "ui": "web/ui vendor",
         "ssid": ssid,
         "targetIp": target_ip,
