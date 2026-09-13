@@ -103,7 +103,7 @@ def _health_payload():
     try:
         ssid = csi_ingest.get_ssid()
     except Exception:
-        ssid = "FLAMBOYAN'S"
+        ssid = "WIFI_RUMAH"
     try:
         target_ip = csi_ingest.get_target_ip()
     except Exception:
@@ -250,7 +250,7 @@ async def api_status():
     try:
         ssid = csi_ingest.get_ssid()
     except Exception:
-        ssid = "FLAMBOYAN'S"
+        ssid = "WIFI_RUMAH"
     try:
         target_ip = csi_ingest.get_target_ip()
     except Exception:
@@ -293,7 +293,7 @@ async def api_info():
     try:
         ssid = csi_ingest.get_ssid()
     except Exception:
-        ssid = "FLAMBOYAN'S"
+        ssid = "WIFI_RUMAH"
     try:
         target_ip = csi_ingest.get_target_ip()
     except Exception:
