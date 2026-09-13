@@ -143,6 +143,29 @@ Jika tidak keluar, cek baud (921600 / 115200) atau reset board.
 Mode alternatif (sniffer, tanpa connect):
 - Firmware set ke promiscuous, filter MAC router. Tidak perlu password, tapi butuh set channel manual via serial command.
 
+## Cara Running Server
+
+```powershell
+# 1. Install dependencies (sekali)
+pip install -r requirements.txt
+
+# 2. Jalankan Python shim (FastAPI + WebSocket + UI)
+python -m uvicorn server_py.app:app --host 127.0.0.1 --port 3000
+
+# Alternatif dev dengan auto-reload
+python -m uvicorn server_py.app:app --host 127.0.0.1 --port 3000 --reload
+
+# Alternatif bind ke LAN (agar bisa diakses device lain)
+# python -m uvicorn server_py.app:app --host 0.0.0.0 --port 3000 --reload
+```
+
+Buka di browser:
+- `http://127.0.0.1:3000/` atau `http://127.0.0.1:3000/ui/` — UI
+- `http://127.0.0.1:3000/health` — cek status (simulated/esp32)
+- `http://127.0.0.1:3000/docs` — Swagger API
+
+> Detail lengkap (UDP 5005, WebSocket, troubleshooting bind) lihat `server_py/README_BE.md`.
+
 ## Troubleshooting
 
 | Masalah | Solusi |
