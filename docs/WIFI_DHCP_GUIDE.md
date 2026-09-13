@@ -1,6 +1,6 @@
-# FLAMBOYAN DHCP Reservation + Re-target Guide
+# WiFi DHCP Reservation + Re-target Guide
 
-> **Tujuan:** Laptop selalu `192.168.1.75` di WiFi `FLAMBOYAN'S` agar ESP32 bisa kirim CSI ke `192.168.1.75:5005` tanpa re-flash. Jika pindah hotspot/kantor, pakai **1-klik Re-target** di Settings.
+> **Tujuan:** Laptop selalu `192.168.1.75` di WiFi rumah `<WIFI_RUMAH>` (contoh: `MyWiFi`) agar ESP32 bisa kirim CSI ke `192.168.1.75:5005` tanpa re-flash. Jika pindah hotspot/kantor, pakai **1-klik Re-target** di Settings.
 
 ---
 
@@ -8,21 +8,21 @@
 
 | Situasi | Solusi |
 |---------|--------|
-| Di rumah, router `FLAMBOYAN'S` milik sendiri, laptop selalu dapat IP sama | **DHCP Reservation** sekali, permanen |
+| Di rumah, router `<WIFI_RUMAH>` (contoh: `MyWiFi`) milik sendiri, laptop selalu dapat IP sama | **DHCP Reservation** sekali, permanen |
 | Pindah WiFi (hotspot HP, kantor, IP laptop berubah) | **Re-target** 1-klik di panel Settings → WiFi |
 | Target IP | **Read-only** `192.168.1.75:5005` — otomatis diisi dari IP laptop saat Re-target |
 
 ---
 
-## A. DHCP Reservation di Router FLAMBOYAN'S (Sekali di Rumah)
+## A. DHCP Reservation di Router `<WIFI_RUMAH>` (Sekali di Rumah)
 
-> Mengunci agar laptop **selalu dapat `192.168.1.75`** tiap connect ke `FLAMBOYAN'S`. ESP32 yang sudah di-provision ke `192.168.1.75` tidak perlu di-flash ulang.
+> Mengunci agar laptop **selalu dapat `192.168.1.75`** tiap connect ke `<WIFI_RUMAH>` (contoh: `MyWiFi`). ESP32 yang sudah di-provision ke `192.168.1.75` tidak perlu di-flash ulang.
 
 ### 1. Siapkan MAC Laptop
 
 ```powershell
 ipconfig /all
-# Cari adapter Wi-Fi yang connect ke FLAMBOYAN'S:
+# Cari adapter Wi-Fi yang connect ke <WIFI_RUMAH> (contoh: MyWiFi):
 #    Wireless LAN adapter Wi-Fi:
 #      Physical Address. . . . . . . . : AA-BB-CC-DD-EE-FF   <- catat ini
 #      IPv4 Address. . . . . . . . . . : 192.168.1.x
@@ -36,7 +36,7 @@ Get-NetAdapter -Name "Wi-Fi" | Select-Object Name, MacAddress, Status
 
 ### 2. Login Router
 
-1. Browser → `http://192.168.1.1` (kebanyakan FLAMBOYAN'S / IndiHome / TP-Link / ZTE pakai ini).
+1. Browser → `http://192.168.1.1` (kebanyakan router rumah / IndiHome / TP-Link / ZTE pakai ini).
 2. Login admin (cek stiker belakang router atau tanya pemilik: biasanya `admin` / `user`).
 3. Masuk menu **DHCP → Address Reservation**  
    Alias di beberapa firmware: `LAN → DHCP Server → Static Lease` / `DHCP Reservation` / `Address Reservation`.
@@ -55,7 +55,7 @@ Get-NetAdapter -Name "Wi-Fi" | Select-Object Name, MacAddress, Status
 ### 4. Reboot & Verifikasi
 
 1. **Reboot router** (System Tools → Reboot) atau cabut/colok power 10 detik.
-2. Di laptop: disconnect lalu reconnect WiFi `FLAMBOYAN'S`, atau:
+2. Di laptop: disconnect lalu reconnect WiFi `<WIFI_RUMAH>` (contoh: `MyWiFi`), atau:
    ```powershell
    ipconfig /release; ipconfig /renew
    ipconfig /all
@@ -63,10 +63,12 @@ Get-NetAdapter -Name "Wi-Fi" | Select-Object Name, MacAddress, Status
    ```
 3. Jika masih bukan `.75`: cek MAC salah ketik, pastikan reservation **Enabled**, dan `DHCP Server` aktif.
 
-Selesai. Selama di `FLAMBOYAN'S` dengan IP `.75`, ESP32 tinggal di-provision sekali:
+Selesai. Selama di `<WIFI_RUMAH>` (contoh: `MyWiFi`) dengan IP `.75`, ESP32 tinggal di-provision sekali:
 
 ```powershell
-python firmware\provision.py --port COMx --ssid "FLAMBOYAN'S" --password <YOUR_WIFI_PASSWORD> --target-ip 192.168.1.75 --target-port 5005
+python firmware\provision.py --port COMx --ssid "<WIFI_RUMAH>" --password <WIFI_PASSWORD> --target-ip 192.168.1.75 --target-port 5005
+# Contoh:
+# python firmware\provision.py --port COMx --ssid "MyWiFi" --password "password123" --target-ip 192.168.1.75 --target-port 5005
 ```
 
 ---
@@ -122,9 +124,9 @@ Get-PnpDevice -Class Ports -PresentOnly | Format-Table FriendlyName, InstanceId
 
 | Kondisi | Pakai |
 |---------|-------|
-| **Di rumah, WiFi tetap `FLAMBOYAN'S`**, ingin sekali-set permanen | **DHCP Reservation** (`192.168.1.75`). ESP32 provision sekali, lupakan. |
+| **Di rumah, WiFi tetap `<WIFI_RUMAH>` (contoh: `MyWiFi`)**, ingin sekali-set permanen | **DHCP Reservation** (`192.168.1.75`). ESP32 provision sekali, lupakan. |
 | **Pindah hotspot/kantor/kos**, laptop dapat IP baru (mis. `192.168.0.10`, `10.x.x.x`) | **Re-target** 1-klik. Tidak perlu ubah router orang lain, cukup tulis ulang NVS ESP32. |
-| **Ganti SSID** (mis. dari `FLAMBOYAN'S` ke `Kantor_2.4G`) | Re-target juga ganti SSID/PASS. Atau manual: `python firmware\provision.py --port COMx --ssid "Kantor_2.4G" --password ... --target-ip <IP-baru>` |
+| **Ganti SSID** (mis. dari `MyWiFi` ke `Kantor_2.4G`) | Re-target juga ganti SSID/PASS. Atau manual: `python firmware\provision.py --port COMx --ssid "Kantor_2.4G" --password ... --target-ip <IP-baru>` |
 | **Balik ke rumah** | Re-target balik ke `192.168.1.75` atau biarkan reservation yang handle (IP kembali `.75` otomatis). |
 
 ### Kenapa Target IP Read-Only?
@@ -162,7 +164,7 @@ Get-PnpDevice -Class Ports -PresentOnly | Format-Table FriendlyName, InstanceId
 
 - COM dinamis: `firmware/READY.md:42`, `docs/HARDWARE.md:51` — port `USB JTAG/serial debug unit (COMx)`, pilih yang terdeteksi.
 - Provision manual: `firmware/provision.py --help` (additive-by-default, `--dry-run`, `--state` untuk debug).
-- Mode WiFi FLAMBOYAN'S: `docs/PLAN-MODE-WIFI.md`.
+- Mode WiFi generik: `docs/PLAN-MODE-WIFI.md` — ganti `<WIFI_RUMAH>` / `MyWiFi` sesuai SSID rumahmu.
 - Hardware & download mode: `docs/HARDWARE.md`.
 
-*Ditulis untuk WiFiSense — FLAMBOYAN'S `192.168.1.75:5005` — jangan ubah kode, cukup rezervasi atau Re-target.*
+*Ditulis untuk WiFiSense — WiFi generik `<WIFI_RUMAH>` (contoh: `MyWiFi`) `192.168.1.75:5005` — SSID dibaca dinamis dari NVS/`nvs_config.csv` via `/health.ssid`, jangan hardcode di kode, cukup rezervasi atau Re-target.*

@@ -1,8 +1,9 @@
 // web/ui/utils/header-status.js — FE header global brand-tagline live status
 // Polls /health (fallback /api/v1/status) every 2s and injects formatted status into
 //   #brand-tagline (observatory.html), #viz-container top (viz.html), header (index.html).
-// Format: "FLAMBOYAN'S → 192.168.1.75:5005 · ESP 192.168.1.92:53083 · RSSI -53dBm var1.67 pps13 LIVE" (green) / SIMULATED (red)
-// Never hardcodes SSID — falls back to data.ssid only.
+// Format: "<WIFI_SSID> → 192.168.1.75:5005 · ESP 192.168.1.92:53083 · RSSI -53dBm var1.67 pps13 LIVE" (green) / SIMULATED (red)
+// Contoh: "MyWiFi → 192.168.1.75:5005 · ..."
+// Never hardcodes SSID — SSID dibaca dinamis dari /health.ssid (NVS → get_ssid()), fallback generik "WIFI_RUMAH" hanya jika file tidak ada.
 
 const POLL_MS = 2000;
 const ENDPOINTS = ['/health', '/api/v1/status'];
