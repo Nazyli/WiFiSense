@@ -113,7 +113,7 @@ _NVS_CANDIDATES = [
     _ROOT / "firmware" / "nvs_config.csv",
 ]
 
-_FALLBACK_SSID = "WIFI_RUMAH"
+_FALLBACK_SSID = ""
 _FALLBACK_TARGET_IP = "192.168.1.75"
 _FALLBACK_TARGET_PORT = 5005
 
@@ -192,7 +192,7 @@ def _load_provision_state() -> dict:
     return {}
 
 def get_ssid() -> str:
-    """Return SSID from nvs_config.csv or provision state, fallback WIFI_RUMAH (generik, contoh: MyWiFi)."""
+    """Return SSID from nvs_config.csv or provision state, fallback "" (placeholder generic —)."""
     data = _load_provision_state()
     ssid = data.get("ssid")
     if ssid:
