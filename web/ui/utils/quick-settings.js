@@ -28,8 +28,8 @@ export class WifiSettings {
   // ── WiFi helpers (ported from SettingsPanel.js) ────────────────────────
   getDefaultWifiDraft() {
     return {
-      ssid: 'WIFI_RUMAH',
-      password: '<YOUR_WIFI_PASSWORD>',
+      ssid: '',
+      password: '',
       channel: 'auto',
       hop: false,
       targetIp: this.EXPECTED_TARGET_IP || '192.168.1.75',
@@ -433,7 +433,7 @@ export class WifiSettings {
           <div style="font-size:11px;color:#9aa8c0;background:rgba(15,20,35,0.6);border:1px dashed rgba(56,68,89,0.5);border-radius:6px;padding:6px 8px;margin-bottom:10px;line-height:1.5;">1. Colok USB S3 → Device Manager → Ports COMx → pilih COMx → 2. Target IP auto 192.168.1.75 → 3. Test dry-run pps&gt;0 → Apply</div>
           <div class="qs-row" style="flex-direction:column;align-items:stretch;gap:4px;margin-bottom:8px;">
             <label for="qs-wifi-ssid" style="font-size:12px;opacity:0.9;">SSID</label>
-            <input type="text" id="qs-wifi-ssid" class="qs-text-input" placeholder="WIFI_RUMAH" value="${ssidVal}" style="width:100%;box-sizing:border-box;">
+            <input type="text" id="qs-wifi-ssid" class="qs-text-input" placeholder="Ketik SSID WiFi..." value="${ssidVal}" style="width:100%;box-sizing:border-box;">
           </div>
           <div class="qs-row" style="flex-direction:column;align-items:stretch;gap:4px;margin-bottom:8px;">
             <label for="qs-wifi-password" style="font-size:12px;opacity:0.9;">Password</label>

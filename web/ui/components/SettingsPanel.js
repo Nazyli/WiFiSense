@@ -133,8 +133,8 @@ export class SettingsPanel {
   // ── WiFi helpers ──────────────────────────────────────────────
   getDefaultWifiDraft() {
     return {
-      ssid: "WIFI_RUMAH",
-      password: '<YOUR_WIFI_PASSWORD>',
+      ssid: "",
+      password: "",
       channel: 'auto',
       hop: false,
       targetIp: this.EXPECTED_TARGET_IP || '192.168.1.75',
@@ -542,7 +542,7 @@ export class SettingsPanel {
             <div class="wifi-tutorial">1. Colok USB S3 → Device Manager → Ports COMx → pilih COMx → 2. Target IP auto 192.168.1.75 → 3. Test dry-run pps>0 → Apply</div>
             <div class="setting-row">
               <label for="wifi-ssid-${this.containerId}">SSID:</label>
-              <input type="text" id="wifi-ssid-${this.containerId}" class="setting-input setting-input-wide" placeholder="WIFI_RUMAH" value="${this.wifiDraft.ssid || ''}">
+              <input type="text" id="wifi-ssid-${this.containerId}" class="setting-input setting-input-wide" placeholder="Ketik SSID WiFi..." value="${this.wifiDraft.ssid || ''}">
             </div>
             <div class="setting-row">
               <label for="wifi-password-${this.containerId}">Password:</label>
