@@ -89,7 +89,24 @@ csi_ingest.register_broadcast(broadcast_sensing)
 # --- helpers ---
 def _health_payload():
     stats = csi_ingest.get_stats()
+    latest = csi_ingest.get_latest()
+    vitals = csi_ingest.get_vitals()
     source = "esp32" if csi_ingest.is_live() else "simulated"
+    # provision network info (ssid/targetIp from NVS or COM4.json fallback)
+    try:
+        ssid = csi_ingest.get_ssid()
+    except Exception:
+        ssid = "FLAMBOYAN'S"
+    try:
+        target_ip = csi_ingest.get_target_ip()
+    except Exception:
+        target_ip = "192.168.1.75"
+    try:
+        target_port = csi_ingest.get_target_port()
+    except Exception:
+        target_port = 5005
+    # timestamp: prefer latest ts, else vitals ts, else now
+    ts = latest.get("ts") or vitals.get("ts") or int(time.time() * 1000)
     return {
         "status": "ok",
         "source": source,
@@ -97,7 +114,21 @@ def _health_payload():
         "pps": stats.get("pps", 0),
         "packets": stats.get("count", 0),
         "udpListening": True if ENABLE_UDP else False,
+        "udpHost": UDP_HOST,
+        "udpPort": UDP_PORT,
         "lastFrom": stats.get("lastFrom"),
+        "ssid": ssid,
+        "targetIp": target_ip,
+        "targetPort": target_port,
+        "rssi": latest.get("rssi", -75.0),
+        "variance": latest.get("variance", 0.0),
+        "motionBand": latest.get("motionBand", 0.0),
+        "breathingBand": latest.get("breathingBand", 0.0),
+        "presence": latest.get("presence", False),
+        "confidence": latest.get("confidence", 0.0),
+        "timestamp": ts,
+        "breathingBpm": vitals.get("breathingBpm"),
+        "heartBpm": vitals.get("heartBpm"),
     }
 
 def _sensing_latest_payload():
@@ -191,18 +222,88 @@ async def api_status():
     live = csi_ingest.is_live()
     source = "esp32" if live else "simulated"
     # ADR-295 source_state: live_verified vs synthetic
+    latest = csi_ingest.get_latest()
+    stats = csi_ingest.get_stats()
+    vitals = csi_ingest.get_vitals()
+    try:
+        ssid = csi_ingest.get_ssid()
+    except Exception:
+        ssid = "FLAMBOYAN'S"
+    try:
+        target_ip = csi_ingest.get_target_ip()
+    except Exception:
+        target_ip = "192.168.1.75"
+    try:
+        target_port = csi_ingest.get_target_port()
+    except Exception:
+        target_port = 5005
+    ts = latest.get("ts") or vitals.get("ts") or int(time.time() * 1000)
     return JSONResponse({
         "source": source,
         "source_state": "live_verified" if live else "synthetic",
         "status": "ok",
         "uptimeSec": int(time.time() - START_TIME),
-        "pps": csi_ingest.get_latest().get("pps", 0),
-        "packets": csi_ingest.get_stats().get("count", 0),
+        "pps": latest.get("pps", 0),
+        "packets": stats.get("count", 0),
+        "udpListening": True if ENABLE_UDP else False,
+        "udpHost": UDP_HOST,
+        "udpPort": UDP_PORT,
+        "lastFrom": stats.get("lastFrom"),
+        "ssid": ssid,
+        "targetIp": target_ip,
+        "targetPort": target_port,
+        "rssi": latest.get("rssi", -75.0),
+        "variance": latest.get("variance", 0.0),
+        "motionBand": latest.get("motionBand", 0.0),
+        "breathingBand": latest.get("breathingBand", 0.0),
+        "presence": latest.get("presence", False),
+        "confidence": latest.get("confidence", 0.0),
+        "timestamp": ts,
+        "breathingBpm": vitals.get("breathingBpm"),
+        "heartBpm": vitals.get("heartBpm"),
     })
 
 @app.get("/api/v1/info")
 async def api_info():
-    return JSONResponse({"service": "wifisense-python-shim", "version": "0.8.8-py", "ui": "web/ui vendor"})
+    latest = csi_ingest.get_latest()
+    stats = csi_ingest.get_stats()
+    vitals = csi_ingest.get_vitals()
+    try:
+        ssid = csi_ingest.get_ssid()
+    except Exception:
+        ssid = "FLAMBOYAN'S"
+    try:
+        target_ip = csi_ingest.get_target_ip()
+    except Exception:
+        target_ip = "192.168.1.75"
+    try:
+        target_port = csi_ingest.get_target_port()
+    except Exception:
+        target_port = 5005
+    ts = latest.get("ts") or vitals.get("ts") or int(time.time() * 1000)
+    return JSONResponse({
+        "service": "wifisense-python-shim",
+        "version": "0.8.8-py",
+        "ui": "web/ui vendor",
+        "ssid": ssid,
+        "targetIp": target_ip,
+        "targetPort": target_port,
+        "udpHost": UDP_HOST,
+        "udpPort": UDP_PORT,
+        "udpListening": True if ENABLE_UDP else False,
+        "lastFrom": stats.get("lastFrom"),
+        "rssi": latest.get("rssi", -75.0),
+        "variance": latest.get("variance", 0.0),
+        "motionBand": latest.get("motionBand", 0.0),
+        "breathingBand": latest.get("breathingBand", 0.0),
+        "presence": latest.get("presence", False),
+        "confidence": latest.get("confidence", 0.0),
+        "timestamp": ts,
+        "breathingBpm": vitals.get("breathingBpm"),
+        "heartBpm": vitals.get("heartBpm"),
+        "source": "esp32" if csi_ingest.is_live() else "simulated",
+        "pps": latest.get("pps", 0),
+    })
 
 @app.get("/api/v1/metrics")
 async def api_metrics():

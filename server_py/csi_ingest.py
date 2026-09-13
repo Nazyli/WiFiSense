@@ -10,7 +10,11 @@ Header 20B LE: magic 4, node 1, n_ant 1, n_sub 2, freq 4, seq 4, rssi 1 (i8), no
 Vitals 32B: magic 4, node 1, flags 1, breathing*100 2, heart*10000 4, rssi 1, n_persons 1, reserved 2, motion f32, score f32, ts_ms u32, reserved 4
 """
 import asyncio
+import csv
+import json
+import os
 import struct
+import sys
 import time
 import math
 import logging
@@ -95,6 +99,132 @@ def is_live():
     if _stats["lastTs"] is None:
         return False
     return (time.time()*1000 - _stats["lastTs"]) < 5000 and _stats["count"] > 0
+
+
+# ---------------------------------------------------------------------------
+# Provision / NVS helpers - expose SSID/targetIp for REST header global
+# BE must read file lokal karena ESP hanya kirim CSI magic 0xC5110001
+# ---------------------------------------------------------------------------
+_ROOT = Path(__file__).resolve().parent.parent
+_NVS_CANDIDATES = [
+    _ROOT / "nvs_config.csv",
+    Path.cwd() / "nvs_config.csv",
+    Path(__file__).resolve().parent / "nvs_config.csv",
+    _ROOT / "firmware" / "nvs_config.csv",
+]
+
+_FALLBACK_SSID = "FLAMBOYAN'S"
+_FALLBACK_TARGET_IP = "192.168.1.75"
+_FALLBACK_TARGET_PORT = 5005
+
+def _default_provision_dir() -> str:
+    env = os.environ
+    if sys.platform == "win32":
+        base = env.get("APPDATA") or os.path.expanduser("~")
+    else:
+        base = env.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+    return os.path.join(base, "wifi-densepose", "esp32-provision-state")
+
+def _parse_nvs_csv(path: Path) -> dict:
+    """Parse nvs_config.csv key,type,encoding,value. Return dict of keys."""
+    try:
+        with open(path, newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            out = {}
+            for row in reader:
+                k = (row.get("key") or "").strip()
+                v = (row.get("value") or "").strip()
+                if not k or k == "csi_cfg":
+                    continue
+                out[k] = v
+            return out
+    except Exception:
+        return {}
+
+def _load_provision_state() -> dict:
+    """Scan provision state dir for first json containing ssid/target_ip."""
+    # Check nvs csv candidates first
+    for p in _NVS_CANDIDATES:
+        if p.is_file():
+            d = _parse_nvs_csv(p)
+            if d.get("ssid") or d.get("target_ip"):
+                # normalize keys
+                return {
+                    "ssid": d.get("ssid"),
+                    "target_ip": d.get("target_ip"),
+                    "target_port": d.get("target_port"),
+                }
+    # Fallback scan provision state dir
+    # allow override via env STATE_DIR
+    candidates_dirs = []
+    env_dir = os.getenv("STATE_DIR") or os.getenv("PROVISION_STATE_DIR")
+    if env_dir:
+        candidates_dirs.append(env_dir)
+    candidates_dirs.append(_default_provision_dir())
+    # also check project-local state mirrors
+    candidates_dirs.append(str(_ROOT / ".provision-state"))
+    for d in candidates_dirs:
+        try:
+            if not os.path.isdir(d):
+                continue
+            # prefer COM4.json first if exists
+            pref = os.path.join(d, "COM4.json")
+            files = []
+            if os.path.isfile(pref):
+                files.append(pref)
+            # then all jsons
+            for name in os.listdir(d):
+                fp = os.path.join(d, name)
+                if fp == pref:
+                    continue
+                if name.lower().endswith(".json") and os.path.isfile(fp):
+                    files.append(fp)
+            for fp in files:
+                try:
+                    with open(fp, "r", encoding="utf-8") as fh:
+                        data = json.load(fh)
+                    if isinstance(data, dict) and (data.get("ssid") or data.get("target_ip")):
+                        return data
+                except Exception:
+                    continue
+        except Exception:
+            continue
+    return {}
+
+def get_ssid() -> str:
+    """Return SSID from nvs_config.csv or provision state, fallback FLAMBOYAN'S."""
+    data = _load_provision_state()
+    ssid = data.get("ssid")
+    if ssid:
+        return str(ssid)
+    return _FALLBACK_SSID
+
+def get_target_ip() -> str:
+    data = _load_provision_state()
+    ip = data.get("target_ip") or data.get("targetIp")
+    if ip:
+        return str(ip)
+    return _FALLBACK_TARGET_IP
+
+def get_target_port() -> int:
+    data = _load_provision_state()
+    port = data.get("target_port") or data.get("targetPort") or data.get("target_port")
+    try:
+        if port is not None:
+            return int(str(port).strip())
+    except Exception:
+        pass
+    return _FALLBACK_TARGET_PORT
+
+def get_network_info() -> dict:
+    """Convenience: return full network/provision dict for status endpoints."""
+    return {
+        "ssid": get_ssid(),
+        "targetIp": get_target_ip(),
+        "targetPort": get_target_port(),
+        "udpHost": os.getenv("UDP_HOST", "0.0.0.0"),
+        "udpPort": int(os.getenv("UDP_PORT", "5005")),
+    }
 
 async def _broadcast(data: dict):
     for cb in list(_broadcast_cbs):
