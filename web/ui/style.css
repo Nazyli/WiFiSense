@@ -1405,7 +1405,7 @@ canvas {
 /* Header info bar */
 .header-info {
   display: flex;
-  gap: var(--space-16);
+  gap: 8px;
   justify-content: center;
   margin-top: var(--space-16);
   font-size: var(--font-size-sm);
@@ -3948,6 +3948,32 @@ a:focus-visible,
   outline-offset: 2px;
 }
 
+.wifi-gear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  background: var(--color-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-base);
+  color: var(--color-text);
+  cursor: pointer;
+  transition: all var(--duration-fast);
+}
+
+.wifi-gear:hover {
+  background: var(--color-secondary-hover);
+  color: var(--color-primary);
+  transform: rotate(15deg);
+}
+
+.wifi-gear:focus-visible {
+  outline: var(--focus-outline);
+  outline-offset: 2px;
+}
+
 /* --- Quick Settings Panel --- */
 
 .quick-settings-panel {
@@ -3968,6 +3994,29 @@ a:focus-visible,
 }
 
 .quick-settings-panel.open {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+.wifi-settings-panel {
+  position: fixed;
+  top: 60px;
+  right: var(--space-16);
+  z-index: 10050;
+  width: 320px;
+  max-width: 90vw;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-8px);
+  transition: all var(--duration-normal) var(--ease-standard);
+}
+
+.wifi-settings-panel.open {
   opacity: 1;
   pointer-events: auto;
   transform: translateY(0);

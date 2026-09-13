@@ -1,26 +1,25 @@
 // Quick Settings Panel - Centralized configuration for all UI features
-// Accessible via gear icon in header
+// Accessible via gear icon in header — WiFi moved to its own wifi-gear/panel
 
 import { apiService, API_TOKEN_STORAGE_KEY } from '../services/api.service.js';
 import { API_CONFIG } from '../config/api.config.js';
 
-export class QuickSettings {
+// ── WifiSettings — standalone gear + panel (sebelah settings-gear) ───────
+export class WifiSettings {
   constructor(app) {
     this.app = app;
-    this.button = null;
-    this.panel = null;
-    this.isOpen = false;
-    // WiFi provision state — duplicated from SettingsPanel.js for 1-click gear access
+    this.wifiButton = null;
+    this.wifiPanel = null;
+    this.isWifiOpen = false;
     this.EXPECTED_TARGET_IP = '192.168.1.75';
     this.WIFI_DRAFT_KEY = 'wifisense-wifi-draft';
     this._lastHealthTargetIp = null;
     this.wifiDraft = this.getDefaultWifiDraft();
     this.wifiTest = { running: false, lastPps: 0, lastFrom: null, pass: null };
+    this._outsideHandler = null;
     this.loadWifiDraft();
   }
 
-  // A stored token is applied at api.service.js module load (before any
-  // request fires) — this panel only saves/clears it.
   init() {
     this.createButton();
     this.createPanel();
@@ -40,7 +39,6 @@ export class QuickSettings {
 
   loadWifiDraft() {
     try {
-      // Share draft with SettingsPanel: primary key 'wifisense-wifi-draft'
       const keys = [
         this.WIFI_DRAFT_KEY,
         'wifisense-wifi-draft-quick-settings',
@@ -54,7 +52,6 @@ export class QuickSettings {
         const v = localStorage.getItem(k);
         if (v) { raw = v; break; }
       }
-      // also try the SettingPanel container-specific keys if present
       if (!raw) {
         for (let i = 0; i < localStorage.length; i++) {
           const k = localStorage.key(i);
@@ -78,7 +75,6 @@ export class QuickSettings {
       localStorage.setItem(this.WIFI_DRAFT_KEY, s);
       try { localStorage.setItem('wifisense-wifi-draft-quick-settings', s); } catch {}
       try { localStorage.setItem('wifiDraft', s); } catch {}
-      // also mirror to generic legacy key so SettingsPanel sees it
       try { localStorage.setItem('wifisense-wifi-draft-settings-panel', s); } catch {}
     } catch { /* noop */ }
   }
@@ -90,8 +86,8 @@ export class QuickSettings {
   }
 
   updateWifiMismatchBadge() {
-    const mismatchBadge = this.panel?.querySelector('#qs-wifi-mismatch-badge');
-    const matchBadge = this.panel?.querySelector('#qs-wifi-match-badge');
+    const mismatchBadge = this.wifiPanel?.querySelector('#qs-wifi-mismatch-badge');
+    const matchBadge = this.wifiPanel?.querySelector('#qs-wifi-match-badge');
     if (!mismatchBadge || !matchBadge) return;
     const targetIp = (this.wifiDraft.targetIp || this.EXPECTED_TARGET_IP).trim();
     const liveTarget = this._lastHealthTargetIp;
@@ -101,7 +97,7 @@ export class QuickSettings {
     const showMismatch = isMismatch || draftMismatch;
     mismatchBadge.style.display = showMismatch ? 'inline-flex' : 'none';
     matchBadge.style.display = showMismatch ? 'none' : 'inline-flex';
-    const ipInput = this.panel.querySelector('#qs-wifi-target-ip');
+    const ipInput = this.wifiPanel.querySelector('#qs-wifi-target-ip');
     if (ipInput) {
       ipInput.value = targetIp;
       ipInput.title = showMismatch ? `Mismatch: expected ${this.EXPECTED_TARGET_IP}` : 'MATCH';
@@ -110,8 +106,8 @@ export class QuickSettings {
   }
 
   async fetchSerialPorts() {
-    const sel = this.panel?.querySelector('#qs-wifi-com-port');
-    const status = this.panel?.querySelector('#qs-wifi-status');
+    const sel = this.wifiPanel?.querySelector('#qs-wifi-com-port');
+    const status = this.wifiPanel?.querySelector('#qs-wifi-status');
     if (!sel) return;
     try {
       if (status) status.textContent = 'Memuat daftar COM...';
@@ -147,7 +143,7 @@ export class QuickSettings {
       if (sel.options.length <= 1 && this.wifiDraft.comPort) {
         sel.innerHTML = `<option value="">-- pilih COM --</option><option value="${this.wifiDraft.comPort}" selected>${this.wifiDraft.comPort} (draft)</option>`;
       }
-      const statusEl = this.panel?.querySelector('#qs-wifi-status');
+      const statusEl = this.wifiPanel?.querySelector('#qs-wifi-status');
       if (statusEl) statusEl.textContent = `Gagal muat COM: ${e.message}`;
     }
   }
@@ -166,7 +162,7 @@ export class QuickSettings {
   }
 
   updateWifiRetargetState() {
-    const btn = this.panel?.querySelector('#qs-wifi-retarget');
+    const btn = this.wifiPanel?.querySelector('#qs-wifi-retarget');
     if (!btn) return;
     const hasCom = !!(this.wifiDraft.comPort && String(this.wifiDraft.comPort).trim());
     btn.disabled = !hasCom;
@@ -176,7 +172,7 @@ export class QuickSettings {
   }
 
   setWifiStatus(msg, isError = false) {
-    const el = this.panel?.querySelector('#qs-wifi-status');
+    const el = this.wifiPanel?.querySelector('#qs-wifi-status');
     if (!el) return;
     el.textContent = msg || '';
     el.style.color = isError ? '#ef4444' : '#6b7a8d';
@@ -184,7 +180,7 @@ export class QuickSettings {
   }
 
   renderWifiTestBadge({ pass, pps, from, source }) {
-    const badge = this.panel?.querySelector('#qs-wifi-test-badge');
+    const badge = this.wifiPanel?.querySelector('#qs-wifi-test-badge');
     if (!badge) return;
     const ip = from ? String(from).split(':')[0] : '192.168.1.92';
     const ppsVal = (pps != null ? pps : (this.wifiTest.lastPps || 0));
@@ -198,8 +194,8 @@ export class QuickSettings {
   }
 
   async handleWifiTestDryRun() {
-    const btn = this.panel?.querySelector('#qs-wifi-test');
-    const badge = this.panel?.querySelector('#qs-wifi-test-badge');
+    const btn = this.wifiPanel?.querySelector('#qs-wifi-test');
+    const badge = this.wifiPanel?.querySelector('#qs-wifi-test-badge');
     if (this.wifiTest.running) return;
     this.wifiTest.running = true;
     if (btn) { btn.disabled = true; btn.textContent = 'Testing… 8s'; }
@@ -265,7 +261,7 @@ export class QuickSettings {
   }
 
   async handleWifiApply() {
-    const btn = this.panel?.querySelector('#qs-wifi-apply');
+    const btn = this.wifiPanel?.querySelector('#qs-wifi-apply');
     if (btn) { btn.disabled = true; btn.textContent = 'Applying…'; }
     this.setWifiStatus('Apply (provision real) → POST ...');
     this.saveWifiDraft();
@@ -314,7 +310,7 @@ export class QuickSettings {
   }
 
   async handleWifiReTarget() {
-    const btn = this.panel?.querySelector('#qs-wifi-retarget');
+    const btn = this.wifiPanel?.querySelector('#qs-wifi-retarget');
     const com = (this.wifiDraft.comPort || '').trim();
     if (!com) {
       this.setWifiStatus('Re-target butuh COM nyambung — pilih COMx dahulu', true);
@@ -350,13 +346,13 @@ export class QuickSettings {
   }
 
   updateWifiUI() {
-    if (!this.panel) return;
-    const ssidEl = this.panel.querySelector('#qs-wifi-ssid');
-    const passEl = this.panel.querySelector('#qs-wifi-password');
-    const chEl = this.panel.querySelector('#qs-wifi-channel');
-    const hopEl = this.panel.querySelector('#qs-wifi-hop');
-    const ipEl = this.panel.querySelector('#qs-wifi-target-ip');
-    const comEl = this.panel.querySelector('#qs-wifi-com-port');
+    if (!this.wifiPanel) return;
+    const ssidEl = this.wifiPanel.querySelector('#qs-wifi-ssid');
+    const passEl = this.wifiPanel.querySelector('#qs-wifi-password');
+    const chEl = this.wifiPanel.querySelector('#qs-wifi-channel');
+    const hopEl = this.wifiPanel.querySelector('#qs-wifi-hop');
+    const ipEl = this.wifiPanel.querySelector('#qs-wifi-target-ip');
+    const comEl = this.wifiPanel.querySelector('#qs-wifi-com-port');
     if (ssidEl) ssidEl.value = this.wifiDraft.ssid || '';
     if (passEl) passEl.value = this.wifiDraft.password || '';
     if (chEl) chEl.value = this.wifiDraft.channel || 'auto';
@@ -377,15 +373,15 @@ export class QuickSettings {
   }
 
   setupWifiHandlers() {
-    const ssidEl = this.panel.querySelector('#qs-wifi-ssid');
-    const passEl = this.panel.querySelector('#qs-wifi-password');
-    const chEl = this.panel.querySelector('#qs-wifi-channel');
-    const hopEl = this.panel.querySelector('#qs-wifi-hop');
-    const comEl = this.panel.querySelector('#qs-wifi-com-port');
-    const refreshBtn = this.panel.querySelector('#qs-wifi-refresh-ports');
-    const testBtn = this.panel.querySelector('#qs-wifi-test');
-    const applyBtn = this.panel.querySelector('#qs-wifi-apply');
-    const retargetBtn = this.panel.querySelector('#qs-wifi-retarget');
+    const ssidEl = this.wifiPanel.querySelector('#qs-wifi-ssid');
+    const passEl = this.wifiPanel.querySelector('#qs-wifi-password');
+    const chEl = this.wifiPanel.querySelector('#qs-wifi-channel');
+    const hopEl = this.wifiPanel.querySelector('#qs-wifi-hop');
+    const comEl = this.wifiPanel.querySelector('#qs-wifi-com-port');
+    const refreshBtn = this.wifiPanel.querySelector('#qs-wifi-refresh-ports');
+    const testBtn = this.wifiPanel.querySelector('#qs-wifi-test');
+    const applyBtn = this.wifiPanel.querySelector('#qs-wifi-apply');
+    const retargetBtn = this.wifiPanel.querySelector('#qs-wifi-retarget');
     ssidEl?.addEventListener('input', (e) => this.updateWifiDraftField('ssid', e.target.value));
     ssidEl?.addEventListener('change', (e) => this.updateWifiDraftField('ssid', e.target.value));
     passEl?.addEventListener('input', (e) => this.updateWifiDraftField('password', e.target.value));
@@ -403,23 +399,21 @@ export class QuickSettings {
   }
 
   createButton() {
-    this.button = document.createElement('button');
-    this.button.className = 'settings-gear';
-    this.button.setAttribute('aria-label', 'Settings');
-    this.button.setAttribute('title', 'Quick settings');
-    this.button.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`;
-
-    this.button.addEventListener('click', () => this.toggle());
-
+    this.wifiButton = document.createElement('button');
+    this.wifiButton.className = 'wifi-gear';
+    this.wifiButton.setAttribute('aria-label', 'WiFi Settings');
+    this.wifiButton.setAttribute('title', 'WiFi settings');
+    this.wifiButton.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12.55a11 11 0 0 1 14 0"/><path d="M8.5 16.5a5 5 0 0 1 7 0"/><circle cx="12" cy="19" r="1"/></svg>`;
+    this.wifiButton.addEventListener('click', () => this.toggle());
     const headerInfo = document.querySelector('.header-info');
-    if (headerInfo) headerInfo.appendChild(this.button);
+    if (headerInfo) headerInfo.appendChild(this.wifiButton);
   }
 
   createPanel() {
-    this.panel = document.createElement('div');
-    this.panel.className = 'quick-settings-panel';
-    this.panel.setAttribute('role', 'dialog');
-    this.panel.setAttribute('aria-label', 'Quick settings');
+    this.wifiPanel = document.createElement('div');
+    this.wifiPanel.className = 'wifi-settings-panel';
+    this.wifiPanel.setAttribute('role', 'dialog');
+    this.wifiPanel.setAttribute('aria-label', 'WiFi settings');
 
     const draft = this.wifiDraft;
     const ssidVal = (draft.ssid || '').replace(/"/g, '&quot;');
@@ -428,43 +422,12 @@ export class QuickSettings {
     const hopChecked = draft.hop ? 'checked' : '';
     const targetIpVal = (draft.targetIp || this.EXPECTED_TARGET_IP).replace(/"/g, '&quot;');
 
-    this.panel.innerHTML = `
+    this.wifiPanel.innerHTML = `
       <div class="qs-header">
-        <h3>Settings</h3>
+        <h3>WiFi Settings</h3>
         <button class="qs-close" aria-label="Close">&times;</button>
       </div>
       <div class="qs-body">
-        <div class="qs-section">
-          <div class="qs-section-title">Display</div>
-          <label class="qs-toggle">
-            <span>Reduced motion</span>
-            <input type="checkbox" id="qs-reduced-motion" ${this.prefersReducedMotion() ? 'checked' : ''}>
-            <span class="qs-switch"></span>
-          </label>
-          <label class="qs-toggle">
-            <span>High contrast</span>
-            <input type="checkbox" id="qs-high-contrast">
-            <span class="qs-switch"></span>
-          </label>
-          <label class="qs-toggle">
-            <span>Compact mode</span>
-            <input type="checkbox" id="qs-compact" ${this.getSetting('compact') ? 'checked' : ''}>
-            <span class="qs-switch"></span>
-          </label>
-        </div>
-        <div class="qs-section">
-          <div class="qs-section-title">Monitoring</div>
-          <label class="qs-toggle">
-            <span>Health polling</span>
-            <input type="checkbox" id="qs-health-polling" checked>
-            <span class="qs-switch"></span>
-          </label>
-          <label class="qs-toggle">
-            <span>Auto-reconnect</span>
-            <input type="checkbox" id="qs-auto-reconnect" checked>
-            <span class="qs-switch"></span>
-          </label>
-        </div>
         <div class="qs-section" id="qs-wifi-section">
           <div class="qs-section-title">WiFi</div>
           <div style="font-size:11px;color:#9aa8c0;background:rgba(15,20,35,0.6);border:1px dashed rgba(56,68,89,0.5);border-radius:6px;padding:6px 8px;margin-bottom:10px;line-height:1.5;">1. Colok USB S3 → Device Manager → Ports COMx → pilih COMx → 2. Target IP auto 192.168.1.75 → 3. Test dry-run pps&gt;0 → Apply</div>
@@ -513,6 +476,125 @@ export class QuickSettings {
           <div id="qs-wifi-status" style="min-height:18px;font-size:12px;color:#6b7a8d;margin-top:6px;word-break:break-word;"></div>
           <div style="margin-top:6px;"><span id="qs-wifi-test-badge" style="display:none;font-size:11px;font-weight:700;padding:4px 10px;border-radius:12px;border:1px solid;">--</span></div>
         </div>
+      </div>
+    `;
+
+    this.wifiPanel.querySelector('.qs-close').addEventListener('click', () => this.close());
+    this.setupWifiHandlers();
+    this.updateWifiUI();
+    document.body.appendChild(this.wifiPanel);
+
+    this._outsideHandler = (e) => {
+      if (this.isWifiOpen && !this.wifiPanel.contains(e.target) && !this.wifiButton.contains(e.target)) {
+        const qsPanel = document.querySelector('.quick-settings-panel');
+        const qsGear = document.querySelector('.settings-gear');
+        if (qsPanel && qsPanel.contains(e.target)) return;
+        if (qsGear && qsGear.contains(e.target)) return;
+        this.close();
+      }
+    };
+    document.addEventListener('click', this._outsideHandler);
+
+    // Non-blocking WiFi fetches (BE may be down)
+    this.fetchSerialPorts().catch(() => {});
+    this.refreshWifiHealth().catch(() => {});
+  }
+
+  toggle() {
+    this.isWifiOpen ? this.close() : this.open();
+  }
+
+  open() {
+    this.isWifiOpen = true;
+    this.wifiPanel.classList.add('open');
+    void this.refreshWifiHealth();
+  }
+
+  close() {
+    this.isWifiOpen = false;
+    this.wifiPanel.classList.remove('open');
+  }
+
+  dispose() {
+    if (this._outsideHandler) document.removeEventListener('click', this._outsideHandler);
+    this.wifiButton?.remove();
+    this.wifiPanel?.remove();
+  }
+}
+
+// ── QuickSettings — 5 sections asli tanpa WiFi, plus companion WifiSettings ──
+export class QuickSettings {
+  constructor(app) {
+    this.app = app;
+    this.button = null;
+    this.panel = null;
+    this.isOpen = false;
+    this._outsideHandler = null;
+    this.wifiSettings = null;
+  }
+
+  init() {
+    this.createButton();
+    this.createPanel();
+    // Companion WiFi gear/panel sebelah settings-gear in .header-info
+    this.wifiSettings = new WifiSettings(this.app);
+    this.wifiSettings.init();
+  }
+
+  createButton() {
+    this.button = document.createElement('button');
+    this.button.className = 'settings-gear';
+    this.button.setAttribute('aria-label', 'Settings');
+    this.button.setAttribute('title', 'Quick settings');
+    this.button.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`;
+    this.button.addEventListener('click', () => this.toggle());
+    const headerInfo = document.querySelector('.header-info');
+    if (headerInfo) headerInfo.appendChild(this.button);
+  }
+
+  createPanel() {
+    this.panel = document.createElement('div');
+    this.panel.className = 'quick-settings-panel';
+    this.panel.setAttribute('role', 'dialog');
+    this.panel.setAttribute('aria-label', 'Quick settings');
+
+    this.panel.innerHTML = `
+      <div class="qs-header">
+        <h3>Settings</h3>
+        <button class="qs-close" aria-label="Close">&times;</button>
+      </div>
+      <div class="qs-body">
+        <div class="qs-section">
+          <div class="qs-section-title">Display</div>
+          <label class="qs-toggle">
+            <span>Reduced motion</span>
+            <input type="checkbox" id="qs-reduced-motion" ${this.prefersReducedMotion() ? 'checked' : ''}>
+            <span class="qs-switch"></span>
+          </label>
+          <label class="qs-toggle">
+            <span>High contrast</span>
+            <input type="checkbox" id="qs-high-contrast">
+            <span class="qs-switch"></span>
+          </label>
+          <label class="qs-toggle">
+            <span>Compact mode</span>
+            <input type="checkbox" id="qs-compact" ${this.getSetting('compact') ? 'checked' : ''}>
+            <span class="qs-switch"></span>
+          </label>
+        </div>
+        <div class="qs-section">
+          <div class="qs-section-title">Monitoring</div>
+          <label class="qs-toggle">
+            <span>Health polling</span>
+            <input type="checkbox" id="qs-health-polling" checked>
+            <span class="qs-switch"></span>
+          </label>
+          <label class="qs-toggle">
+            <span>Auto-reconnect</span>
+            <input type="checkbox" id="qs-auto-reconnect" checked>
+            <span class="qs-switch"></span>
+          </label>
+        </div>
         <div class="qs-section">
           <div class="qs-section-title">Cognitum Account</div>
           <div class="qs-row" style="flex-direction: column; align-items: stretch; gap: 6px;">
@@ -549,21 +631,13 @@ export class QuickSettings {
       </div>
     `;
 
-    // Bind events
     this.panel.querySelector('.qs-close').addEventListener('click', () => this.close());
 
-    // Re-check sign-in state whenever the page could be showing a stale view:
-    // `pageshow` fires on a back/forward-cache restore (where no script re-runs
-    // and no fetch would otherwise happen), and `visibilitychange` covers
-    // signing in or out in another tab. Opening the panel alone is not enough —
-    // the panel may already be open, or the page may be restored wholesale.
     window.addEventListener('pageshow', () => { void refreshSignInPanel(this.panel); });
     document.addEventListener('visibilitychange', () => {
       if (!document.hidden) void refreshSignInPanel(this.panel);
     });
 
-    // ADR-271 sign-in. Bound here as well as in refreshSignInPanel so a click
-    // works even if the status fetch has not resolved yet.
     this.panel.querySelector('#qs-signin')
       .addEventListener('click', () => { window.location.href = '/oauth/start'; });
     this.panel.querySelector('#qs-signout')
@@ -585,9 +659,7 @@ export class QuickSettings {
     });
 
     this.panel.querySelector('#qs-health-polling').addEventListener('change', (e) => {
-      const healthService = this.app?.components?.dashboard?.healthSubscription;
       if (e.target.checked) {
-        // Resume would need import - just dispatch event
         document.dispatchEvent(new CustomEvent('health-polling-toggle', { detail: true }));
       } else {
         document.dispatchEvent(new CustomEvent('health-polling-toggle', { detail: false }));
@@ -633,24 +705,20 @@ export class QuickSettings {
       document.dispatchEvent(new CustomEvent('start-onboarding'));
     });
 
-    // WiFi wiring — duplicated from SettingsPanel for 1-click gear access
-    this.setupWifiHandlers();
-    this.updateWifiUI();
-
     document.body.appendChild(this.panel);
 
-    // Close on outside click
-    document.addEventListener('click', (e) => {
+    this._outsideHandler = (e) => {
       if (this.isOpen && !this.panel.contains(e.target) && !this.button.contains(e.target)) {
+        const wifiPanel = document.querySelector('.wifi-settings-panel');
+        const wifiGear = document.querySelector('.wifi-gear');
+        if (wifiPanel && wifiPanel.contains(e.target)) return;
+        if (wifiGear && wifiGear.contains(e.target)) return;
         this.close();
       }
-    });
+    };
+    document.addEventListener('click', this._outsideHandler);
 
-    // Apply saved settings on init
     this.applySavedSettings();
-    // Non-blocking WiFi fetches (BE may be down)
-    this.fetchSerialPorts().catch(() => {});
-    this.refreshWifiHealth().catch(() => {});
   }
 
   applySavedSettings() {
@@ -684,13 +752,7 @@ export class QuickSettings {
   open() {
     this.isOpen = true;
     this.panel.classList.add('open');
-    // Refresh on every open, not once at construction: the session may have
-    // been established in another tab, or expired since the page loaded.
-    // Fire-and-forget — a failure renders as a message in the panel, and must
-    // not stop the panel opening.
     void refreshSignInPanel(this.panel);
-    // Refresh WiFi health/badge on open as well
-    void this.refreshWifiHealth();
   }
 
   close() {
@@ -709,20 +771,14 @@ export class QuickSettings {
   }
 
   dispose() {
+    if (this._outsideHandler) document.removeEventListener('click', this._outsideHandler);
     this.button?.remove();
     this.panel?.remove();
+    this.wifiSettings?.dispose();
   }
 }
 
 // ---- Cognitum browser sign-in (ADR-271) -------------------------------------
-//
-// `/oauth/status` is intentionally UNGATED: a signed-out browser cannot ask a
-// gated endpoint whether sign-in is available. It returns capability flags and,
-// when a session exists, who it belongs to — never a credential.
-//
-// Sign-in is a full-page navigation, not fetch(): the server replies 302 to
-// auth.cognitum.one, and the browser must follow it and carry the transaction
-// cookie. An XHR would follow the redirect invisibly and land nowhere useful.
 export async function refreshSignInPanel(root = document) {
   const status = root.querySelector('#qs-signin-status');
   const signIn = root.querySelector('#qs-signin');
@@ -732,8 +788,6 @@ export async function refreshSignInPanel(root = document) {
   let info;
   try {
     const resp = await fetch('/oauth/status', { credentials: 'same-origin' });
-    // 404 = a server predating ADR-271. Say so plainly rather than offering a
-    // button that will 404.
     if (resp.status === 404) {
       status.textContent = 'This server does not support Cognitum sign-in.';
       signIn.hidden = true;
@@ -762,7 +816,6 @@ export async function refreshSignInPanel(root = document) {
     signIn.hidden = false;
     signOut.hidden = true;
   } else if (info.auth_required) {
-    // Auth is on but OAuth is not — the static-token panel below is the path.
     status.textContent = 'This server uses a shared API token (see API Access below).';
     signIn.hidden = true;
     signOut.hidden = true;
