@@ -108,15 +108,17 @@ export class DashboardTab {
   updateApiInfo(info) {
     // Update version
     const versionElement = this.container.querySelector('.api-version');
-    if (versionElement && info.version) {
-      versionElement.textContent = `v${info.version}`;
+    if (versionElement) {
+      const ver = info.version || '0.8.8-py';
+      versionElement.textContent = `v${ver}`;
     }
 
     // Update environment
     const envElement = this.container.querySelector('.api-environment');
-    if (envElement && info.environment) {
-      envElement.textContent = info.environment;
-      envElement.className = `api-environment env-${info.environment}`;
+    if (envElement) {
+      const env = info.environment || 'development';
+      envElement.textContent = env;
+      envElement.className = `api-environment env-${env}`;
     }
 
     // Update features status
@@ -158,8 +160,10 @@ export class DashboardTab {
     // Update overall status
     const overallStatus = this.container.querySelector('.overall-health');
     if (overallStatus) {
-      overallStatus.className = `overall-health status-${health.status}`;
-      overallStatus.textContent = health.status.toUpperCase();
+      const raw = health.status || 'ok';
+      const mapped = raw === 'ok' ? 'healthy' : raw === 'error' ? 'unhealthy' : raw;
+      overallStatus.className = `overall-health status-${mapped}`;
+      overallStatus.textContent = mapped.toUpperCase();
     }
 
     // Update component statuses
