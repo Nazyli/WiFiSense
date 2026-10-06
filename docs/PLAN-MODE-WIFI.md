@@ -16,7 +16,7 @@
 # BENAR — kutip ganda:
 $ssid = "FLAMBOYAN'S"
 $pass = "<YOUR_WIFI_PASSWORD>"
-python -m esptool --port COM4 --ssid "FLAMBOYAN'S" --password <YOUR_WIFI_PASSWORD>
+python firmware\provision.py --port COM4 --ssid "<YOUR_WIFI_SSID>" --password "<YOUR_WIFI_PASSWORD>" --target-ip "<YOUR_AGGREGATOR_IP>"
 idf.py menuconfig  # isi SSID dengan FLAMBOYAN'S langsung
 
 # SALAH — kutip tunggal pecah:
@@ -297,7 +297,7 @@ for ($ch=1; $ch -le 11; $ch++) {
 ```
 
 **Kenapa STA dulu?**
-- Password `<YOUR_WIFI_PASSWORD>` sudah diketahui — tidak ada alasan pakai sniffer dulu
+- Jika password WiFi tersedia, coba STA terlebih dahulu.
 - STA lebih stabil untuk dataset awal
 - Sniffer bagus untuk **eksperimen kedua** (bandingkan, atau kalau mau sniff tanpa ganggu AP)
 
@@ -394,7 +394,7 @@ python -m serial.tools.miniterm COM4 115200 --raw
 
 | Masalah | Mode | Solusi |
 |---------|------|--------|
-| `auth failed` / `wrong password` | STA | Cek `<YOUR_WIFI_PASSWORD>` lower-case, tanpa spasi. Coba connect HP dulu ke `FLAMBOYAN'S` untuk verifikasi. |
+| `auth failed` / `wrong password` | STA | Cek password WiFi sesuai konfigurasi router (case-sensitive). Coba connect HP dulu untuk verifikasi. |
 | `connected but no CSI` | STA | Cek `CONFIG_ESP_WIFI_CSI_ENABLED=y` di build. Cek baud 115200/921600. Generate trafik pakai `ping`. |
 | `no AP found` | STA | Cek router 2.4GHz aktif, SSID broadcast on, bukan hidden. Dekatkan ESP32 <3m. |
 | `CSI empty / len 0` | Keduanya | Cek firmware CSI enabled, cek channel, coba reset board. |

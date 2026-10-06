@@ -267,7 +267,7 @@ Jika firmware RuView support provisioning (cek `tools/provision.py` atau `script
 ```powershell
 # Contoh jika ada provision.py
 cd D:\AI\WiFiSense\_ruview\firmware\esp32-csi-node
-python tools\provision.py --port COM4 --ssid "FLAMBOYAN'S" --password <YOUR_WIFI_PASSWORD> --channel 6
+python tools\provision.py --port COM4 --ssid "FLAMBOYAN'S" --password "<YOUR_WIFI_PASSWORD>" --channel 6
 
 # Atau via serial console setelah flash:
 python -m serial.tools.miniterm COM4 115200 --raw

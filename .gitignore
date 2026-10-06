@@ -83,3 +83,13 @@ esp32-csi-node-*.zip
 !web/ui/
 !web/ui/**
 
+# Credential-bearing provisioning artifacts (after vendored UI exceptions)
+**/nvs_config.csv
+**/nvs_provision.bin
+**/nvs.bin
+**/wifi_config.h
+**/secrets.txt
+**/history-replacements.txt
+**/wifi-credentials.local.*
+/.history-cleanup/
+

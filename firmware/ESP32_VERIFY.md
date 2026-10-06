@@ -51,12 +51,17 @@ scripts/monitor.ps1             ada
 ```csv
 key,type,encoding,value
 csi_cfg,namespace,,
-ssid,data,string,FLAMBOYAN'S
+ssid,data,string,<YOUR_WIFI_SSID>
 password,data,string,<YOUR_WIFI_PASSWORD>
-target_ip,data,string,192.168.1.75
+target_ip,data,string,<YOUR_AGGREGATOR_IP>
 ```
 
-Namespace `csi_cfg` — WiFi SSID `FLAMBOYAN'S`, target aggregator `192.168.1.75:5005` (default port 5005). Field tambahan tersedia via `provision.py`: `--tdm-slot/--tdm-total`, `--edge-tier/--pres-thresh/--fall-thresh`, `--channel/--filter-mac` (ADR-039/060/073/066 — lihat `provision.py --help`).
+Namespace `csi_cfg` — WiFi SSID `<YOUR_WIFI_SSID>`, target aggregator `<YOUR_AGGREGATOR_IP>:5005` (default port 5005). Field tambahan tersedia via `provision.py`: `--tdm-slot/--tdm-total`, `--edge-tier/--pres-thresh/--fall-thresh`, `--channel/--filter-mac` (ADR-039/060/073/066 — lihat `provision.py --help`).
+
+Semua nilai `<YOUR_...>` adalah placeholder: ganti saat provisioning lokal.
+CSV, binary NVS, dan state provisioning dapat berisi password asli; jangan commit
+atau unggah file tersebut. Untuk credential yang pernah ter-commit, lihat
+[panduan pembersihan history](../docs/SECRET-CLEANUP.md).
 
 **Provision command contoh (COM4, dry-run verified):**
 ```powershell
@@ -65,15 +70,15 @@ $env:PYTHONIOENCODING="utf-8"; python -X utf8 firmware\provision.py --help
 
 # dry-run: generate NVS tanpa flash (hasil 2026-09-13: 24576 B, state persisted)
 $env:PYTHONIOENCODING="utf-8"
-python -X utf8 firmware\provision.py --port COM4 --ssid "FLAMBOYAN'S" --password "<YOUR_WIFI_PASSWORD>" --target-ip 192.168.1.75 --target-port 5005 --dry-run
+python -X utf8 firmware\provision.py --port COM4 --ssid "<YOUR_WIFI_SSID>" --password "<YOUR_WIFI_PASSWORD>" --target-ip "<YOUR_AGGREGATOR_IP>" --target-port 5005 --dry-run
 # -> NVS binary saved to nvs_provision.bin (24576 bytes)
 # -> Flash manually: python -m esptool --chip auto --port COM4 write_flash 0x9000 nvs_provision.bin
 # -> State persisted to %APPDATA%\wifi-densepose\esp32-provision-state\COM4.json
 
 # flash nyata (butuh COM4 tersedia, tanpa dry-run):
-python -X utf8 firmware\provision.py --port COM4 --chip esp32s3 --ssid "FLAMBOYAN'S" --password "<YOUR_WIFI_PASSWORD>" --target-ip 192.168.1.75 --target-port 5005
+python -X utf8 firmware\provision.py --port COM4 --chip esp32s3 --ssid "<YOUR_WIFI_SSID>" --password "<YOUR_WIFI_PASSWORD>" --target-ip "<YOUR_AGGREGATOR_IP>" --target-port 5005
 # atau dengan TDM/ADR:
-python -X utf8 firmware\provision.py --port COM4 --ssid "FLAMBOYAN'S" --password <YOUR_WIFI_PASSWORD> --target-ip 192.168.1.75 --target-port 5005 --tdm-slot 0 --tdm-total 1 --edge-tier 2 --channel 6
+python -X utf8 firmware\provision.py --port COM4 --ssid "<YOUR_WIFI_SSID>" --password "<YOUR_WIFI_PASSWORD>" --target-ip "<YOUR_AGGREGATOR_IP>" --target-port 5005 --tdm-slot 0 --tdm-total 1 --edge-tier 2 --channel 6
 
 # atau via CSV manual (fallback §496 provision.py):
 # nvs_config.csv -> nvs.bin 0x6000, lalu esptool write_flash 0x9000
@@ -159,13 +164,13 @@ Get-FileHash firmware\bootloader.bin -Algorithm SHA256
 Get-Content firmware\READY.md
 Get-Content nvs_config.csv
 $env:PYTHONIOENCODING="utf-8"; python -X utf8 firmware\provision.py --help
-$env:PYTHONIOENCODING="utf-8"; python -X utf8 firmware\provision.py --port COM4 --ssid "FLAMBOYAN'S" --password <YOUR_WIFI_PASSWORD> --target-ip 192.168.1.75 --target-port 5005 --dry-run
+$env:PYTHONIOENCODING="utf-8"; python -X utf8 firmware\provision.py --port COM4 --ssid "<YOUR_WIFI_SSID>" --password "<YOUR_WIFI_PASSWORD>" --target-ip "<YOUR_AGGREGATOR_IP>" --target-port 5005 --dry-run
 
 # flash manual (butuh download mode BOOT+RESET)
 python -m esptool --chip esp32s3 --port COM4 --baud 460800 write_flash 0x0000 firmware\bootloader.bin 0x8000 firmware\partition-table.bin 0xf000 firmware\ota_data_initial.bin 0x20000 firmware\esp32-csi-node.bin
 
 # provision setelah flash
-python -X utf8 firmware\provision.py --port COM4 --ssid "FLAMBOYAN'S" --password <YOUR_WIFI_PASSWORD> --target-ip 192.168.1.75 --target-port 5005
+python -X utf8 firmware\provision.py --port COM4 --ssid "<YOUR_WIFI_SSID>" --password "<YOUR_WIFI_PASSWORD>" --target-ip "<YOUR_AGGREGATOR_IP>" --target-port 5005
 
 # monitor + burn-in 5 menit
 .\scripts\monitor.ps1 -Port COM4 -Baud 115200
