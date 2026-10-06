@@ -192,16 +192,18 @@ export class DashboardTab {
     const element = this.container.querySelector(`[data-component="${uiComponent}"]`);
     
     if (element) {
-      element.className = `component-status status-${status.status}`;
+      const normalized = typeof status === 'string' ? { status, message: '' } : (status || {});
+      const statusStr = String(normalized.status || 'unknown');
+      element.className = `component-status status-${statusStr}`;
       const statusText = element.querySelector('.status-text');
       const statusMessage = element.querySelector('.status-message');
       
       if (statusText) {
-        statusText.textContent = status.status.toUpperCase();
+        statusText.textContent = statusStr.toUpperCase();
       }
       
-      if (statusMessage && status.message) {
-        statusMessage.textContent = status.message;
+      if (statusMessage && normalized.message) {
+        statusMessage.textContent = normalized.message;
       }
     }
     

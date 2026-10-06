@@ -13,8 +13,10 @@ import asyncio
 import csv
 import json
 import os
+import re
 import struct
 import sys
+import threading
 import time
 import math
 import logging
@@ -69,7 +71,9 @@ _latest_vitals = {
     "ts_boot_ms": 0,
     "node_id": 1,
 }
-_stats = {"count": 0, "bytes": 0, "lastFrom": None, "lastLen": 0, "lastTs": None, "pps": 0, "firstTs": None}
+_stats = {"count": 0, "bytes": 0, "lastFrom": None, "lastLen": 0, "lastTs": None, "pps": 0, "firstTs": None, "lastUdpMs": 0, "lastSrc": None}
+_serial_seq = 0
+_serial_state: dict = {"thread": None, "stop_event": None, "serial": None, "port": None, "baud": None}
 
 # Broadcast callbacks registered by app.py (ws managers)
 _broadcast_cbs = []
@@ -91,7 +95,12 @@ def get_stats():
     s = dict(_stats)
     s["uptimeSec"] = int(time.time() - START_SEC)
     s["pps"] = _latest.get("pps", 0)
-    s["source"] = _latest.get("source", "simulated")
+    # source from lastSrc if serial, else from _latest
+    last_src = _stats.get("lastSrc")
+    if last_src == "serial":
+        s["source"] = "serial"
+    else:
+        s["source"] = _latest.get("source", "simulated")
     return s
 
 def is_live():
@@ -303,6 +312,111 @@ def get_network_info() -> dict:
         "udpHost": os.getenv("UDP_HOST", "0.0.0.0"),
         "udpPort": int(os.getenv("UDP_PORT", "5005")),
     }
+
+def _get_mode_path() -> str:
+    """Path for persisted ingest mode (global, not per-port)."""
+    try:
+        d = _default_provision_dir()
+    except Exception:
+        d = os.path.join(os.path.expanduser("~"), ".config", "wifi-densepose", "esp32-provision-state")
+    return os.path.join(d, "_ingest_mode.json")
+
+
+def get_ingest_mode() -> str:
+    """Return 'wifi' or 'channel', default 'wifi' if not persisted."""
+    # 1) dedicated mode file
+    try:
+        p = _get_mode_path()
+        if os.path.isfile(p):
+            with open(p, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            m = str(data.get("mode", "")).strip().lower() if isinstance(data, dict) else ""
+            if m in ("wifi", "channel"):
+                return m
+    except Exception:
+        pass
+    # 2) scan provision state dir for any file containing mode
+    try:
+        d = _default_provision_dir()
+        if os.path.isdir(d):
+            for name in os.listdir(d):
+                if not name.lower().endswith(".json"):
+                    continue
+                # skip our own mode file
+                if name == "_ingest_mode.json":
+                    continue
+                fp = os.path.join(d, name)
+                try:
+                    with open(fp, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    if isinstance(data, dict):
+                        m = str(data.get("mode", "")).strip().lower()
+                        if m in ("wifi", "channel"):
+                            return m
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    return "wifi"
+
+
+def set_ingest_mode(mode: str) -> None:
+    """Persist mode ('wifi'|'channel') to provision state dir, preserving other fields."""
+    m = str(mode or "").strip().lower()
+    if m not in ("wifi", "channel"):
+        m = "wifi"
+    # write dedicated file
+    try:
+        p = _get_mode_path()
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        # preserve other fields if file exists
+        existing: dict = {}
+        if os.path.isfile(p):
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    d = json.load(f)
+                if isinstance(d, dict):
+                    existing = d
+            except Exception:
+                existing = {}
+        existing["mode"] = m
+        tmp = p + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(existing, f, indent=2, sort_keys=True)
+            f.write("\n")
+        os.replace(tmp, p)
+    except Exception as e:
+        log.debug("set_ingest_mode dedicated file failed: %s", e)
+    # also patch per-port state files so _load_provision_state scanning sees mode
+    try:
+        d = _default_provision_dir()
+        if os.path.isdir(d):
+            for name in os.listdir(d):
+                if not name.lower().endswith(".json"):
+                    continue
+                if name == "_ingest_mode.json":
+                    continue
+                fp = os.path.join(d, name)
+                try:
+                    with open(fp, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    if not isinstance(data, dict):
+                        continue
+                    if data.get("mode") == m:
+                        continue
+                    data["mode"] = m
+                    tmp = fp + ".tmp"
+                    with open(tmp, "w", encoding="utf-8") as f:
+                        json.dump(data, f, indent=2, sort_keys=True)
+                        f.write("\n")
+                    os.replace(tmp, fp)
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    # also if no per-port files yet, create a stub so mode survives fresh install
+    # (already handled by dedicated file)
+
 
 async def _broadcast(data: dict):
     for cb in list(_broadcast_cbs):
@@ -595,7 +709,7 @@ def _handle_vitals(parsed: dict, now_ms: int):
     # also influence presence heuristic via flags
     # but keep variance-based presence as primary; vitals presence is secondary
 
-def _handle_csi(parsed: dict, now_ms: int):
+def _handle_csi(parsed: dict, now_ms: int, src: str = "udp"):
     # update stats window
     _update_pps(now_ms)
     # heuristic
@@ -610,6 +724,7 @@ def _handle_csi(parsed: dict, now_ms: int):
     # confidence heuristic
     confidence = min(0.95, 0.5 + var*0.12) if presence else 0.45
     # update latest
+    src_label = "serial" if src == "serial" else "esp32"
     _latest.update({
         "rssi": mean_rssi,
         "variance": float(var),
@@ -619,13 +734,178 @@ def _handle_csi(parsed: dict, now_ms: int):
         "confidence": float(confidence),
         "ts": now_ms,
         "_simulated": False,
-        "source": "esp32",
+        "source": src_label,
         "node_id": parsed["node_id"],
         "seq": parsed["seq"],
         "n_sub": parsed["n_sub"],
         "freq_mhz": parsed["freq"],
         "amplitude": mags,
     })
+    _stats["lastSrc"] = src_label
+
+
+def _schedule_broadcast():
+    try:
+        msg = _build_sensing_update()
+        try:
+            asyncio.create_task(_broadcast(msg))
+        except RuntimeError:
+            # no running loop (e.g. serial thread), try to get loop and schedule
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    loop.create_task(_broadcast(msg))
+                else:
+                    # fallback: run synchronously if no loop
+                    pass
+            except Exception:
+                pass
+    except Exception as e:
+        log.warning("broadcast build failed: %s", e)
+
+
+def parse_csi_text_line(line: str):
+    """Parse toleran 'CSI_DATA, len=128, rssi=-42, channel=6, [12,-3,45,...]' -> dict or None."""
+    try:
+        if not line or "csi" not in line.lower():
+            return None
+        # find array bracket
+        m_arr = re.search(r"\[(.*?)\]", line)
+        if not m_arr:
+            return None
+        inside = m_arr.group(1)
+        nums = re.findall(r"-?\d+", inside)
+        if len(nums) < 2:
+            return None
+        arr = []
+        for n in nums:
+            try:
+                arr.append(int(n))
+            except Exception:
+                continue
+        if len(arr) < 2:
+            return None
+        # len, rssi, channel (optional)
+        m_len = re.search(r"len\s*=\s*(\d+)", line, re.IGNORECASE)
+        m_rssi = re.search(r"rssi\s*=\s*(-?\d+)", line, re.IGNORECASE)
+        m_ch = re.search(r"channel\s*=\s*(\d+)", line, re.IGNORECASE)
+        # use parsed array length to sanity-check len but don't enforce strict
+        _len = int(m_len.group(1)) if m_len else len(arr)
+        rssi = int(m_rssi.group(1)) if m_rssi else -75
+        channel = int(m_ch.group(1)) if m_ch else 6
+        # clamp each value -128..127
+        payload_list = []
+        for v in arr:
+            if v < -128:
+                v = -128
+            elif v > 127:
+                v = 127
+            payload_list.append(v)
+        if len(payload_list) % 2 == 1:
+            payload_list.append(0)
+        payload = bytes([b & 0xFF for b in payload_list])
+        # n_sub heuristic
+        n_sub = len(payload_list) // 2 if len(payload_list) >= 2 else len(payload_list)
+        if n_sub <= 0:
+            n_sub = len(arr)
+        freq = 2400 + 5 * channel
+        global _serial_seq
+        _serial_seq += 1
+        seq = _serial_seq
+        return {
+            "magic": MAGIC_CSI,
+            "node_id": 1,
+            "n_ant": 1,
+            "n_sub": n_sub,
+            "freq": freq,
+            "seq": seq,
+            "rssi": rssi,
+            "noise": 0,
+            "payload": payload,
+            "expected_len": n_sub * 2,
+        }
+    except Exception as e:
+        log.debug("parse_csi_text_line error: %s line=%s", e, line[:120])
+        return None
+
+
+def _ingest_serial_parsed(parsed: dict, now_ms: int):
+    """Ingest parsed serial frame: update stats + handle + broadcast."""
+    _stats["count"] += 1
+    _stats["lastTs"] = now_ms
+    _stats["lastFrom"] = "serial"
+    _stats["lastSrc"] = "serial"
+    if _stats["firstTs"] is None:
+        _stats["firstTs"] = now_ms
+    _stats["lastLen"] = len(parsed.get("payload", b""))
+    _update_pps(now_ms)
+    _handle_csi(parsed, now_ms, src="serial")
+    _schedule_broadcast()
+
+
+def ingest_frame(data: bytes, src: str):
+    """Reusable ingest for UDP and serial binary frames."""
+    now_ms = int(time.time() * 1000)
+    now = time.time()
+    _stats["count"] += 1
+    _stats["bytes"] += len(data)
+    # lastFrom handling: for serial, use 'serial'; for udp generic 'udp'
+    if src == "serial":
+        _stats["lastFrom"] = "serial"
+        _stats["lastSrc"] = "serial"
+    else:
+        # keep previous udp address if exists, else mark src
+        # datagram_received previously used addr ip:port; we fallback to src label
+        _stats["lastFrom"] = _stats.get("lastFrom") or src
+        # but ensure lastSrc reflects udp
+        if src == "udp":
+            _stats["lastSrc"] = "esp32"
+    _stats["lastLen"] = len(data)
+    _stats["lastTs"] = now_ms
+    if _stats["firstTs"] is None:
+        _stats["firstTs"] = now_ms
+    if src == "udp":
+        _stats["lastUdpMs"] = now_ms
+    _update_pps(now_ms)
+    if len(data) < 4:
+        log.debug("[%s] short %dB", src, len(data))
+        return
+    magic = struct.unpack_from("<I", data, 0)[0]
+    preview = data[:32].hex()
+    cnt = _stats["count"]
+    if cnt <= 3 or cnt % 200 == 1:
+        log.info("[%s] #%d %dB magic=0x%08x head=%s pps~%d", src, cnt, len(data), magic, preview[:48], _stats["pps"])
+    parsed = None
+    if magic == MAGIC_CSI:
+        parsed = parse_csi_packet(data)
+        if parsed:
+            _handle_csi(parsed, now_ms, src=src)
+        else:
+            log.debug("[%s] CSI parse fail", src)
+    elif magic == MAGIC_VITALS:
+        parsed = parse_vitals_packet(data)
+        if parsed:
+            _handle_vitals(parsed, now_ms)
+        else:
+            log.debug("[%s] Vitals parse fail", src)
+    elif magic == MAGIC_WASM:
+        log.debug("[%s] WASM packet %dB", src, len(data))
+    else:
+        log.debug("[%s] unknown magic 0x%08x %dB", src, magic, len(data))
+        try:
+            arr = np.frombuffer(data, dtype=np.uint8).astype(float)
+            var = float(np.var(arr)) / 500.0
+            _var_window.append(var)
+            _latest["variance"] = var
+            _latest["presence"] = var > VAR_THRESHOLD
+            _latest["ts"] = now_ms
+            _latest["_simulated"] = False
+            _latest["source"] = "serial" if src == "serial" else "esp32"
+            _stats["lastSrc"] = "serial" if src == "serial" else "esp32"
+        except Exception:
+            pass
+    _schedule_broadcast()
+
 
 class CsiProtocol(asyncio.DatagramProtocol):
     def __init__(self, loop=None):
@@ -637,71 +917,13 @@ class CsiProtocol(asyncio.DatagramProtocol):
         log.info("[UDP] listening on %s", transport.get_extra_info("sockname"))
 
     def datagram_received(self, data: bytes, addr):
-        now_ms = int(time.time()*1000)
-        now = time.time()
-        _stats["count"] += 1
-        _stats["bytes"] += len(data)
-        _stats["lastFrom"] = f"{addr[0]}:{addr[1]}"
-        _stats["lastLen"] = len(data)
-        _stats["lastTs"] = now_ms
-        if _stats["firstTs"] is None:
-            _stats["firstTs"] = now_ms
-        # pps window
-        _update_pps(now_ms)
-
-        if len(data) < 4:
-            log.debug("[UDP] short %dB from %s", len(data), addr)
-            return
-        magic = struct.unpack_from("<I", data, 0)[0]
-        preview = data[:32].hex()
-        # log throttling
-        cnt = _stats["count"]
-        if cnt <= 3 or cnt % 200 == 1:
-            log.info("[UDP] #%d %dB from %s magic=0x%08x head=%s pps~%d", cnt, len(data), addr, magic, preview[:48], _stats["pps"])
-
-        parsed = None
-        if magic == MAGIC_CSI:
-            parsed = parse_csi_packet(data)
-            if parsed:
-                _handle_csi(parsed, now_ms)
-            else:
-                log.debug("[UDP] CSI parse fail from %s", addr)
-        elif magic == MAGIC_VITALS:
-            parsed = parse_vitals_packet(data)
-            if parsed:
-                _handle_vitals(parsed, now_ms)
-                # vitals also updates pps via _update_pps already
-            else:
-                log.debug("[UDP] Vitals parse fail")
-        elif magic == MAGIC_WASM:
-            # WASM Output: variable, contains u8 type + f32 value events
-            log.debug("[UDP] WASM packet %dB from %s", len(data), addr)
-            # no state update, but counts toward pps
-        else:
-            log.debug("[UDP] unknown magic 0x%08x %dB from %s", magic, len(data), addr)
-            # try to still treat as CSI if header looks plausible?
-            # fallback: raw variance from payload
-            try:
-                arr = np.frombuffer(data, dtype=np.uint8).astype(float)
-                var = float(np.var(arr))/500.0
-                _var_window.append(var)
-                _latest["variance"] = var
-                _latest["presence"] = var > VAR_THRESHOLD
-                _latest["ts"] = now_ms
-                _latest["_simulated"] = False
-                _latest["source"] = "esp32"
-            except:
-                pass
-
-        # After processing, broadcast sensing_update to WS clients
-        # Use get_event_loop create_task to avoid blocking
+        ingest_frame(data, "udp")
+        # preserve exact sender address for lastFrom (ingest_frame uses generic)
         try:
-            msg = _build_sensing_update()
-            # For vitals-only packets, preserve previous variance but update vitals field
-            # schedule broadcast
-            asyncio.create_task(_broadcast(msg))
-        except Exception as e:
-            log.warning("broadcast build failed: %s", e)
+            _stats["lastFrom"] = f"{addr[0]}:{addr[1]}"
+            _stats["lastUdpMs"] = int(time.time() * 1000)
+        except Exception:
+            pass
 
     def error_received(self, exc):
         log.error("[UDP] error: %s", exc)
@@ -714,6 +936,148 @@ async def start_udp_listener(host="0.0.0.0", port=5005):
     )
     log.info("[UDP] bound to %s:%d", host, port)
     return transport, protocol
+
+
+def start_serial_reader(port: str, baud: int = 115200):
+    """Start serial reader thread for CSI_DATA text lines. Idempotent."""
+    # idempotent: if already running return existing handle
+    if _serial_state.get("thread") is not None and _serial_state["thread"].is_alive():
+        return _serial_state.get("thread")
+    try:
+        import serial  # type: ignore
+        from serial import SerialException  # type: ignore
+    except Exception as e:
+        log.warning("pyserial not installed, serial reader disabled: %s", e)
+        return None
+    import threading as _thr
+
+    stop_event = _thr.Event()
+    _serial_state["stop_event"] = stop_event
+    _serial_state["port"] = port
+    _serial_state["baud"] = baud
+
+    def _reader():
+        ser = None
+        # keep SerialException in scope
+        try:
+            from serial import SerialException as SE  # type: ignore
+        except Exception:
+            SE = Exception  # type: ignore
+        while not stop_event.is_set():
+            try:
+                if ser is None:
+                    try:
+                        import serial as _sermod  # type: ignore
+                        ser = _sermod.Serial(port, baud, timeout=1)
+                        _serial_state["serial"] = ser
+                        log.info("[SERIAL] opened %s @%d", port, baud)
+                    except SE as e:  # type: ignore
+                        log.warning("[SERIAL] open failed %s: %s (retry 2s)", port, e)
+                        ser = None
+                        _serial_state["serial"] = None
+                        # sleep with stop check
+                        for _ in range(20):
+                            if stop_event.is_set():
+                                break
+                            time.sleep(0.1)
+                        continue
+                    except Exception as e:
+                        log.warning("[SERIAL] open failed %s: %s", port, e)
+                        ser = None
+                        for _ in range(20):
+                            if stop_event.is_set():
+                                break
+                            time.sleep(0.1)
+                        continue
+                # read line
+                try:
+                    raw = ser.readline()
+                except SE as e:  # type: ignore
+                    log.warning("[SERIAL] readline SerialException %s: %s (reopen 2s)", port, e)
+                    try:
+                        ser.close()
+                    except Exception:
+                        pass
+                    ser = None
+                    _serial_state["serial"] = None
+                    for _ in range(20):
+                        if stop_event.is_set():
+                            break
+                        time.sleep(0.1)
+                    continue
+                except Exception as e:
+                    log.debug("[SERIAL] readline error: %s", e)
+                    time.sleep(0.1)
+                    continue
+                if not raw:
+                    continue
+                try:
+                    line = raw.decode("utf-8", errors="ignore").strip()
+                except Exception:
+                    line = ""
+                if not line:
+                    continue
+                if "csi" not in line.lower():
+                    log.debug("[SERIAL] unknown line: %s", line[:200])
+                    continue
+                parsed = parse_csi_text_line(line)
+                if parsed is None:
+                    log.debug("[SERIAL] parse fail: %s", line[:200])
+                    continue
+                # gating
+                try:
+                    mode = get_ingest_mode()
+                except Exception:
+                    mode = "wifi"
+                now_ms = int(time.time() * 1000)
+                last_udp = _stats.get("lastUdpMs", 0) or 0
+                allow = (mode == "channel") or (now_ms - last_udp > 5000)
+                if not allow:
+                    continue
+                _ingest_serial_parsed(parsed, now_ms)
+            except Exception as e:
+                log.debug("[SERIAL] loop error: %s", e)
+                time.sleep(0.5)
+        # cleanup on exit
+        if ser is not None:
+            try:
+                ser.close()
+            except Exception:
+                pass
+        _serial_state["serial"] = None
+        log.info("[SERIAL] reader stopped %s", port)
+
+    t = _thr.Thread(target=_reader, daemon=True, name="csi-serial-reader")
+    _serial_state["thread"] = t
+    t.start()
+    return t
+
+
+def stop_serial_reader():
+    """Stop serial reader thread idempotently."""
+    ev = _serial_state.get("stop_event")
+    th = _serial_state.get("thread")
+    ser = _serial_state.get("serial")
+    if ev is not None:
+        try:
+            ev.set()
+        except Exception:
+            pass
+    if ser is not None:
+        try:
+            ser.close()
+        except Exception:
+            pass
+    if th is not None:
+        try:
+            th.join(timeout=3)
+        except Exception:
+            pass
+    _serial_state["thread"] = None
+    _serial_state["stop_event"] = None
+    _serial_state["serial"] = None
+    # keep port/baud for restart
+    return True
 
 # For synchronous REST consumers to get a sensing_update without WS
 def build_sensing_update_sync():

@@ -79,8 +79,12 @@ export class SettingsPanel {
     this.WIFI_DRAFT_KEY = `wifisense-wifi-draft-${this.containerId}`;
     this.WIFI_LEGACY_KEY = `wifi-draft-${this.containerId}`;
     this.EXPECTED_TARGET_IP = '192.168.1.75';
+    this._actualLocalIp = null;
+    this._lastHealthTargetIp = null;
     this.wifiDraft = this.getDefaultWifiDraft();
     this.wifiTest = { running: false, lastPps: 0, lastFrom: null, pass: null };
+    this._liveData = { pps: null, variance: null, presence: null, reachable: false };
+    this._livePollTimer = null;
 
     this.callbacks = {
       onSettingsChange: null,
@@ -126,6 +130,8 @@ export class SettingsPanel {
     // Fetch COM ports and health for mismatch badge (non-blocking, BE may be down)
     this.fetchSerialPorts().catch(() => {});
     this.refreshWifiHealth().catch(() => {});
+    if (this._livePollTimer) clearInterval(this._livePollTimer);
+    this._livePollTimer = setInterval(() => { this.refreshWifiHealth().catch(() => {}); }, 1000);
     
     this.logger.info('SettingsPanel component initialized successfully');
   }
@@ -133,12 +139,14 @@ export class SettingsPanel {
   // ── WiFi helpers ──────────────────────────────────────────────
   getDefaultWifiDraft() {
     return {
+      mode: 'wifi',
       ssid: "",
       password: "",
       channel: 'auto',
       hop: false,
-      targetIp: this.EXPECTED_TARGET_IP || '192.168.1.75',
-      comPort: ''
+      targetIp: this._actualLocalIp || this.EXPECTED_TARGET_IP || '192.168.1.75',
+      comPort: '',
+      edgeTier: 1
     };
   }
 
@@ -148,12 +156,24 @@ export class SettingsPanel {
       if (raw) {
         const parsed = JSON.parse(raw);
         this.wifiDraft = { ...this.getDefaultWifiDraft(), ...parsed };
-        // normalize channel to string
-        if (this.wifiDraft.channel !== 'auto') {
-          const c = String(this.wifiDraft.channel);
-          this.wifiDraft.channel = ['1','6','11','auto'].includes(c) ? c : 'auto';
+        if (!['wifi', 'channel'].includes(this.wifiDraft.mode)) this.wifiDraft.mode = 'wifi';
+        const c = String(this.wifiDraft.channel);
+        const validCh = ['1','6','11','auto','all'];
+        if (!validCh.includes(c)) {
+          this.wifiDraft.channel = this.wifiDraft.mode === 'channel' ? 'all' : 'auto';
+        }
+        if (this.wifiDraft.mode === 'channel' && this.wifiDraft.channel === 'auto') this.wifiDraft.channel = 'all';
+        // Additive merge for edgeTier — default 1 if missing or invalid
+        const t = this.wifiDraft.edgeTier;
+        const n = Number(t);
+        if (t == null || t === '' || Number.isNaN(n) || ![0, 1, 2].includes(n)) {
+          this.wifiDraft.edgeTier = 1;
+        } else {
+          this.wifiDraft.edgeTier = n;
         }
         this.logger.debug('WiFi draft loaded', this.wifiDraft);
+      } else {
+        if (this.wifiDraft.edgeTier == null) this.wifiDraft.edgeTier = 1;
       }
     } catch (e) {
       this.logger.warn('Failed to load WiFi draft', { error: e.message });
@@ -180,23 +200,42 @@ export class SettingsPanel {
   }
 
   updateWifiMismatchBadge() {
+    if (this.wifiDraft.mode === 'channel') return;
     const mismatchBadge = document.getElementById(`wifi-mismatch-badge-${this.containerId}`);
     const matchBadge = document.getElementById(`wifi-match-badge-${this.containerId}`);
     if (!mismatchBadge || !matchBadge) return;
-    const targetIp = (this.wifiDraft.targetIp || this.EXPECTED_TARGET_IP).trim();
-    // also compare with live health targetIp if available
-    const liveTarget = this._lastHealthTargetIp;
-    const compareIp = liveTarget || targetIp;
-    const isMismatch = compareIp !== this.EXPECTED_TARGET_IP;
-    const draftMismatch = targetIp !== this.EXPECTED_TARGET_IP;
-    const showMismatch = isMismatch || draftMismatch;
+    const expectedIp = (this._actualLocalIp || this.EXPECTED_TARGET_IP || '').trim();
+    const targetIp = (this.wifiDraft.targetIp || expectedIp).trim();
+    const liveTarget = this._lastHealthTargetIp ? String(this._lastHealthTargetIp).trim() : null;
+    const effectiveTarget = liveTarget || targetIp;
+    const isMismatch = effectiveTarget !== expectedIp;
+    const showMismatch = isMismatch;
+    if (targetIp !== expectedIp && !isMismatch) {
+      this.wifiDraft.targetIp = expectedIp;
+      this.saveWifiDraft();
+    }
     mismatchBadge.style.display = showMismatch ? 'inline-flex' : 'none';
     matchBadge.style.display = showMismatch ? 'none' : 'inline-flex';
     const ipInput = document.getElementById(`wifi-target-ip-${this.containerId}`);
     if (ipInput) {
-      ipInput.value = targetIp;
-      ipInput.title = showMismatch ? `Mismatch: expected ${this.EXPECTED_TARGET_IP}` : 'MATCH';
+      ipInput.value = expectedIp;
+      ipInput.title = showMismatch ? `Mismatch: expected ${expectedIp} got ${effectiveTarget}` : 'MATCH';
       ipInput.style.borderColor = showMismatch ? 'rgba(239,68,68,0.8)' : 'rgba(56,68,89,0.6)';
+    }
+    this.updateDynamicTargetIpHint();
+  }
+
+  updateDynamicTargetIpHint() {
+    const expectedIp = this._actualLocalIp || this.EXPECTED_TARGET_IP;
+    const step2 = document.getElementById(`wifi-step-2-${this.containerId}`);
+    if (step2) {
+      const codeEls = step2.querySelectorAll('code');
+      if (codeEls && codeEls.length > 0) {
+        const firstCode = codeEls[0];
+        if (firstCode.textContent.includes(':5005') || firstCode.textContent.match(/\d+\.\d+\.\d+\.\d+/)) {
+          firstCode.textContent = `${expectedIp}:5005`;
+        }
+      }
     }
   }
 
@@ -251,24 +290,133 @@ export class SettingsPanel {
     }
   }
 
-  async refreshWifiHealth() {
+  async fetchNetworkIp() {
     try {
-      const url = `${API_CONFIG.BASE_URL}/health/health`;
-      const resp = await fetch(url, { headers: { Accept: 'application/json' } });
-      if (!resp.ok) return;
-      const data = await resp.json().catch(() => null);
-      if (!data) return;
-      // remember for mismatch badge
-      if (data.targetIp) this._lastHealthTargetIp = String(data.targetIp).trim();
-      else if (data.target_ip) this._lastHealthTargetIp = String(data.target_ip).trim();
-      // also allow updating draft targetIp if empty? keep read-only 192.168.1.75 per spec, but reflect live mismatch
-      this.updateWifiMismatchBadge();
-    } catch {}
+      const url = `${API_CONFIG.BASE_URL}/api/v1/network/local-ip`;
+      const resp = await fetch(url, { headers: { Accept: 'application/json' }, cache: 'no-store' });
+      if (resp.ok) {
+        const j = await resp.json().catch(() => null);
+        if (j) {
+          const localIp = j.localIp || j.local_ip || j.localIP || j.ip || j.laptop_ip || null;
+          const targetIp = j.targetIp || j.target_ip || j.targetIP || j.target_ip_address || null;
+          if (localIp) this._actualLocalIp = String(localIp).trim();
+          if (targetIp) this._lastHealthTargetIp = String(targetIp).trim();
+          if (!this._lastHealthTargetIp && this._actualLocalIp) this._lastHealthTargetIp = this._actualLocalIp;
+          if (!this._actualLocalIp && this._lastHealthTargetIp) this._actualLocalIp = this._lastHealthTargetIp;
+        }
+      }
+    } catch { /* noop */ }
+    let healthOk = false;
+    try {
+      const url2 = `${API_CONFIG.BASE_URL}/health/health`;
+      const resp2 = await fetch(url2, { headers: { Accept: 'application/json' }, cache: 'no-store' });
+      if (resp2.ok) {
+        const data = await resp2.json().catch(() => null);
+        if (data) {
+          healthOk = true;
+          if (data.targetIp) this._lastHealthTargetIp = String(data.targetIp).trim();
+          else if (data.target_ip) this._lastHealthTargetIp = String(data.target_ip).trim();
+          const hLocal = data.localIp || data.local_ip || data.laptop_ip || data.laptopIp || null;
+          if (hLocal) this._actualLocalIp = String(hLocal).trim();
+          const ppsRaw = data.pps ?? data.metrics?.pps ?? data.pps_value ?? null;
+          const varRaw = data.variance ?? data.var ?? data.metrics?.variance ?? data.metrics?.var ?? data.variance_value ?? null;
+          const presRaw = data.presence ?? data.presence_detected ?? data.occupied ?? data.metrics?.presence ?? data.metrics?.occupied ?? null;
+          this._liveData.pps = ppsRaw != null ? Number(ppsRaw) : null;
+          this._liveData.variance = varRaw != null ? Number(varRaw) : null;
+          if (typeof presRaw === 'boolean') this._liveData.presence = presRaw;
+          else if (presRaw != null) this._liveData.presence = presRaw === true || presRaw === 1 || String(presRaw).toLowerCase() === 'true';
+          else this._liveData.presence = null;
+          this._liveData.reachable = true;
+        }
+      } else {
+        try {
+          const fallbackUrl = `${API_CONFIG.BASE_URL}/health`;
+          const r3 = await fetch(fallbackUrl, { headers: { Accept: 'application/json' }, cache: 'no-store' });
+          if (r3.ok) {
+            const d3 = await r3.json().catch(() => null);
+            if (d3) {
+              healthOk = true;
+              const ppsRaw = d3.pps ?? d3.metrics?.pps ?? null;
+              const varRaw = d3.variance ?? d3.var ?? d3.metrics?.variance ?? null;
+              const presRaw = d3.presence ?? d3.presence_detected ?? d3.occupied ?? d3.metrics?.presence ?? null;
+              this._liveData.pps = ppsRaw != null ? Number(ppsRaw) : null;
+              this._liveData.variance = varRaw != null ? Number(varRaw) : null;
+              if (typeof presRaw === 'boolean') this._liveData.presence = presRaw;
+              else if (presRaw != null) this._liveData.presence = presRaw === true || presRaw === 1 || String(presRaw).toLowerCase() === 'true';
+              else this._liveData.presence = null;
+              this._liveData.reachable = true;
+              if (d3.targetIp) this._lastHealthTargetIp = String(d3.targetIp).trim();
+              else if (d3.target_ip) this._lastHealthTargetIp = String(d3.target_ip).trim();
+            }
+          }
+        } catch { /* noop */ }
+      }
+      if (!healthOk) {
+        this._liveData.reachable = false;
+      }
+    } catch {
+      this._liveData.reachable = false;
+    }
+    this.updateWifiMismatchBadge();
+    this.updateWifiLiveBar();
+  }
+
+  async refreshWifiHealth() {
+    await this.fetchNetworkIp();
+  }
+
+  updateWifiLiveBar() {
+    const el = document.getElementById(`wifi-live-bar-${this.containerId}`);
+    if (!el) return;
+    if (!this._liveData.reachable) {
+      el.textContent = 'pps -- | var -- | presence --';
+      el.style.color = '#6b7a8d';
+      el.style.background = 'rgba(15,20,35,0.4)';
+      el.style.borderColor = 'rgba(56,68,89,0.3)';
+      return;
+    }
+    const pps = this._liveData.pps != null && !Number.isNaN(this._liveData.pps) ? String(this._liveData.pps) : '--';
+    let varText = '--';
+    if (this._liveData.variance != null && !Number.isNaN(this._liveData.variance)) {
+      const v = this._liveData.variance;
+      varText = Number.isInteger(v) ? String(v) : v.toFixed(2);
+    }
+    const presence = this._liveData.presence;
+    const dot = presence ? '●' : '○';
+    const presenceText = presence == null ? '--' : (presence ? 'yes' : 'no');
+    el.textContent = `pps ${pps} | var ${varText} | presence ${dot} ${presenceText}`;
+    if (presence === true) {
+      el.style.color = '#4ade80';
+      el.style.background = 'rgba(34,197,94,0.12)';
+      el.style.borderColor = 'rgba(34,197,94,0.4)';
+    } else if (presence === false) {
+      el.style.color = '#9ca3af';
+      el.style.background = 'rgba(15,20,35,0.4)';
+      el.style.borderColor = 'rgba(56,68,89,0.3)';
+    } else {
+      el.style.color = '#c8d0dc';
+      el.style.background = 'rgba(15,20,35,0.4)';
+      el.style.borderColor = 'rgba(56,68,89,0.3)';
+    }
+  }
+
+  updateSsidGuard() {
+    const warn = document.getElementById(`wifi-ssid-warn-${this.containerId}`);
+    const ssidEl = document.getElementById(`wifi-ssid-${this.containerId}`);
+    if (!warn || !ssidEl) return;
+    const v = String(ssidEl.value || this.wifiDraft.ssid || '').toLowerCase();
+    const show = v.includes('_5ghz') || v.includes('5g');
+    warn.style.display = show ? 'block' : 'none';
   }
 
   updateWifiRetargetState() {
     const btn = document.getElementById(`wifi-retarget-${this.containerId}`);
     if (!btn) return;
+    if (this.wifiDraft.mode === 'channel') {
+      btn.style.display = 'none';
+      return;
+    }
+    btn.style.display = '';
     const hasCom = !!(this.wifiDraft.comPort && String(this.wifiDraft.comPort).trim());
     btn.disabled = !hasCom;
     btn.title = hasCom ? '1-klik Re-target laptop IP (butuh COM nyambung)' : 'Pilih COM port dahulu (butuh COM nyambung)';
@@ -302,6 +450,21 @@ export class SettingsPanel {
     const btn = document.getElementById(`wifi-test-${this.containerId}`);
     const badge = document.getElementById(`wifi-test-badge-${this.containerId}`);
     if (this.wifiTest.running) return;
+    if (this.wifiDraft.mode === 'channel') {
+      const com = (this.wifiDraft.comPort || '').trim();
+      if (!com) {
+        this.setWifiStatus('Pilih COM port dulu untuk Sniff Channel', true);
+        this.renderWifiTestBadge({ pass: false, pps: 0, from: null, source: null });
+        return;
+      }
+    } else {
+      const ssid = (this.wifiDraft.ssid || '').trim();
+      if (!ssid) {
+        this.setWifiStatus('Isi SSID dulu sebelum Test', true);
+        this.renderWifiTestBadge({ pass: false, pps: 0, from: null, source: null });
+        return;
+      }
+    }
     this.wifiTest.running = true;
     if (btn) { btn.disabled = true; btn.textContent = 'Testing… 8s'; }
     if (badge) badge.style.display = 'none';
@@ -342,29 +505,43 @@ export class SettingsPanel {
           }
           // remember health target for mismatch
           if (h.targetIp) this._lastHealthTargetIp = String(h.targetIp).trim();
+          else if (h.target_ip) this._lastHealthTargetIp = String(h.target_ip).trim();
         }
-        // update countdown on button
+        const remain = Math.max(0, Math.ceil((durationMs - (Date.now() - start)) / 1000));
         if (btn) {
-          const remain = Math.max(0, Math.ceil((durationMs - (Date.now() - start)) / 1000));
           btn.textContent = `Testing… ${remain}s`;
         }
+        this.setWifiStatus(`Test dry-run polling... ${remain}s pps=${best.pps} from=${best.from || '-'}`);
         await new Promise(res => setTimeout(res, intervalMs));
       }
-      // final evaluation
-      const pass = best.pass && best.pps > 0;
-      const finalPps = best.pps || (lastHealth ? Number(lastHealth.pps || 0) : 0);
-      const finalFrom = best.from || (lastHealth ? (lastHealth.lastFrom || lastHealth.last_from || '192.168.1.92') : '192.168.1.92');
-      const finalSource = best.source || (lastHealth ? lastHealth.source : null);
-      this.wifiTest.lastPps = finalPps;
-      this.wifiTest.lastFrom = finalFrom;
-      this.wifiTest.pass = pass;
-      this.renderWifiTestBadge({ pass, pps: finalPps, from: finalFrom, source: finalSource });
-      if (pass) {
-        this.setWifiStatus(`Dry-run PASS — Connected ESP ${String(finalFrom).split(':')[0]} pps ${finalPps}`);
+      if (!lastHealth) {
+        this.wifiTest.lastPps = 0;
+        this.wifiTest.lastFrom = null;
+        this.wifiTest.pass = false;
+        this.renderWifiTestBadge({ pass: false, pps: 0, from: null, source: null });
+        this.setWifiStatus('Dry-run FAIL — server tidak reachable (cek uvicorn :3000 & CORS)', true);
+        this.updateWifiMismatchBadge();
       } else {
-        this.setWifiStatus(`Dry-run FAIL — pps ${finalPps} (cek ESP 192.168.1.92 & USB)`, true);
+        const pass = best.pass && best.pps > 0;
+        const finalPps = best.pps || Number(lastHealth.pps ?? lastHealth.metrics?.pps ?? 0);
+        const finalSource = best.source || lastHealth.source || null;
+        let finalFrom = best.from || (lastHealth.lastFrom || lastHealth.last_from || null);
+        if (!finalFrom && finalSource === 'serial') {
+          const com = (this.wifiDraft.comPort || '').trim();
+          finalFrom = com ? `serial:${com}` : 'serial';
+        }
+        if (!finalFrom) finalFrom = '192.168.1.92';
+        this.wifiTest.lastPps = finalPps;
+        this.wifiTest.lastFrom = finalFrom;
+        this.wifiTest.pass = pass;
+        this.renderWifiTestBadge({ pass, pps: finalPps, from: finalFrom, source: finalSource });
+        if (pass) {
+          this.setWifiStatus(`Dry-run PASS — Connected ESP ${String(finalFrom).split(':')[0]} pps ${finalPps}`);
+        } else {
+          this.setWifiStatus(`Dry-run FAIL — pps ${finalPps} (cek ESP 192.168.1.92 & USB)`, true);
+        }
+        this.updateWifiMismatchBadge();
       }
-      this.updateWifiMismatchBadge();
     } finally {
       this.wifiTest.running = false;
       if (btn) { btn.disabled = false; btn.textContent = 'Test (dry-run)'; }
@@ -376,24 +553,41 @@ export class SettingsPanel {
     if (btn) { btn.disabled = true; btn.textContent = 'Applying…'; }
     this.setWifiStatus('Apply (provision real) → POST ...');
     this.saveWifiDraft();
-    const payload = {
-      ssid: this.wifiDraft.ssid,
-      password: this.wifiDraft.password,
-      channel: this.wifiDraft.channel === 'auto' ? null : Number(this.wifiDraft.channel),
-      hop: !!this.wifiDraft.hop,
-      hop_channels: this.wifiDraft.hop ? (this.wifiDraft.channel === 'auto' ? '1,6,11' : String(this.wifiDraft.channel)) : null,
-      target_ip: this.wifiDraft.targetIp || this.EXPECTED_TARGET_IP,
-      targetIp: this.wifiDraft.targetIp || this.EXPECTED_TARGET_IP,
-      comPort: this.wifiDraft.comPort,
-      port: this.wifiDraft.comPort,
-      dryRun: false
-    };
+    let payload;
+    const tier = Number(this.wifiDraft.edgeTier ?? 1);
+    const tierSafe = [0, 1, 2].includes(tier) ? tier : 1;
+    if (this.wifiDraft.mode === 'channel') {
+      const chRaw = String(this.wifiDraft.channel);
+      const chEff = chRaw === 'auto' ? 'all' : chRaw;
+      const com = this.wifiDraft.comPort;
+      if (chEff === 'all') {
+        payload = { mode: 'channel', channel: null, hop: true, hop_channels: '1,6,11', port: com, comPort: com, dryRun: false, edge_tier: tierSafe, edgeTier: tierSafe };
+      } else {
+        payload = { mode: 'channel', channel: Number(chEff), hop: null, hop_channels: null, port: com, comPort: com, dryRun: false, edge_tier: tierSafe, edgeTier: tierSafe };
+      }
+    } else {
+      payload = {
+        mode: 'wifi',
+        ssid: this.wifiDraft.ssid,
+        password: this.wifiDraft.password,
+        channel: null,
+        hop: null,
+        hop_channels: null,
+        target_ip: this.wifiDraft.targetIp || this._actualLocalIp || this.EXPECTED_TARGET_IP,
+        targetIp: this.wifiDraft.targetIp || this._actualLocalIp || this.EXPECTED_TARGET_IP,
+        comPort: this.wifiDraft.comPort,
+        port: this.wifiDraft.comPort,
+        dryRun: false,
+        edge_tier: tierSafe,
+        edgeTier: tierSafe
+      };
+    }
     // endpoints to try (BE lane may use any of these)
     const endpoints = [
+      '/api/v1/config/apply',
       '/api/v1/config/provision',
       '/api/v1/config/wifi',
-      '/api/v1/serial/provision',
-      '/api/v1/config/apply'
+      '/api/v1/serial/provision'
     ];
     let ok = false; let lastErr = null; let respJson = null;
     for (const ep of endpoints) {
@@ -407,8 +601,8 @@ export class SettingsPanel {
         const j = await r.json().catch(() => ({}));
         if (r.ok) { ok = true; respJson = j; break; }
         lastErr = j.message || j.error || j.detail || `HTTP ${r.status}`;
-        // if 404, try next endpoint
-        if (r.status === 404) continue;
+        // if 404/405, try next endpoint
+        if (r.status === 404 || r.status === 405) continue;
         else break;
       } catch (e) {
         lastErr = e.message;
@@ -435,11 +629,12 @@ export class SettingsPanel {
     }
     if (btn) { btn.disabled = true; btn.textContent = 'Re-targeting…'; }
     this.setWifiStatus('1-klik Re-target laptop IP → POST /api/v1/config/re-target ...');
+    const effectiveIp = this._actualLocalIp || this.EXPECTED_TARGET_IP;
     const payload = {
       port: com,
       comPort: com,
-      targetIp: this.EXPECTED_TARGET_IP,
-      target_ip: this.EXPECTED_TARGET_IP
+      targetIp: effectiveIp,
+      target_ip: effectiveIp
     };
     try {
       const url = `${API_CONFIG.BASE_URL}/api/v1/config/re-target`;
@@ -450,10 +645,19 @@ export class SettingsPanel {
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.message || j.error || j.detail || `HTTP ${r.status}`);
-      this.wifiDraft.targetIp = this.EXPECTED_TARGET_IP;
+      const newIp = j.localIp || j.local_ip || j.localIP || j.targetIp || j.target_ip || j.targetIP || j.laptop_ip || j.laptopIp || effectiveIp;
+      this.wifiDraft.targetIp = String(newIp).trim();
+      if (j.localIp || j.local_ip || j.localIP || j.laptop_ip || j.laptopIp) {
+        this._actualLocalIp = String(j.localIp || j.local_ip || j.localIP || j.laptop_ip || j.laptopIp).trim();
+      } else if (j.targetIp || j.target_ip || j.targetIP) {
+        this._actualLocalIp = String(j.targetIp || j.target_ip || j.targetIP).trim();
+      } else if (newIp) {
+        this._actualLocalIp = String(newIp).trim();
+      }
+      this._lastHealthTargetIp = String(newIp).trim();
       this.saveWifiDraft();
       this.updateWifiUI();
-      this.setWifiStatus(`Re-target OK → ${this.EXPECTED_TARGET_IP} (COM ${com}) — ${j.message || 'done'}`);
+      this.setWifiStatus(`Re-target OK → ${String(newIp).trim()} (COM ${com}) — ${j.message || 'done'}`);
       this.logger.info('Re-target success', j);
       try { await this.applyToServices(); } catch {}
     } catch (e) {
@@ -476,9 +680,11 @@ export class SettingsPanel {
     const comEl = document.getElementById(`wifi-com-port-${id}`);
     if (ssidEl) ssidEl.value = this.wifiDraft.ssid || '';
     if (passEl) passEl.value = this.wifiDraft.password || '';
-    if (chEl) chEl.value = this.wifiDraft.channel || 'auto';
+    let chVal = this.wifiDraft.channel || 'auto';
+    if (this.wifiDraft.mode === 'channel' && chVal === 'auto') chVal = 'all';
+    if (chEl) chEl.value = chVal;
     if (hopEl) hopEl.checked = !!this.wifiDraft.hop;
-    if (ipEl) ipEl.value = this.wifiDraft.targetIp || this.EXPECTED_TARGET_IP;
+    if (ipEl) ipEl.value = this._lastHealthTargetIp || this.wifiDraft.targetIp || this._actualLocalIp || this.EXPECTED_TARGET_IP;
     if (comEl && this.wifiDraft.comPort) {
       // ensure option exists
       const has = Array.from(comEl.options).some(o => o.value === this.wifiDraft.comPort);
@@ -490,8 +696,31 @@ export class SettingsPanel {
       }
       comEl.value = this.wifiDraft.comPort;
     }
+    const mode = this.wifiDraft.mode || 'wifi';
+    const wifiRadio = document.getElementById(`wifi-mode-wifi-${id}`);
+    const chanRadio = document.getElementById(`wifi-mode-channel-${id}`);
+    if (wifiRadio) wifiRadio.checked = mode === 'wifi';
+    if (chanRadio) chanRadio.checked = mode === 'channel';
+    const ssidRow = document.getElementById(`wifi-ssid-row-${id}`);
+    const passRow = document.getElementById(`wifi-password-row-${id}`);
+    const chRow = document.getElementById(`wifi-channel-row-${id}`);
+    const hopRow = document.getElementById(`wifi-hop-row-${id}`);
+    const ipRow = document.getElementById(`wifi-target-ip-row-${id}`);
+    if (ssidRow) ssidRow.style.display = mode === 'wifi' ? '' : 'none';
+    if (passRow) passRow.style.display = mode === 'wifi' ? '' : 'none';
+    if (chRow) chRow.style.display = mode === 'channel' ? '' : 'none';
+    if (hopRow) hopRow.style.display = 'none';
+    if (ipRow) ipRow.style.display = mode === 'wifi' ? '' : 'none';
+    const tier = Number(this.wifiDraft.edgeTier ?? 1);
+    const tierSafe = [0, 1, 2].includes(tier) ? tier : 1;
+    for (const v of [0, 1, 2]) {
+      const r = document.getElementById(`wifi-tier-${v}-${id}`);
+      if (r) r.checked = v === tierSafe;
+    }
     this.updateWifiMismatchBadge();
     this.updateWifiRetargetState();
+    this.updateWifiLiveBar();
+    this.updateSsidGuard();
   }
 
   setupWifiHandlers() {
@@ -505,9 +734,11 @@ export class SettingsPanel {
     const testBtn = document.getElementById(`wifi-test-${id}`);
     const applyBtn = document.getElementById(`wifi-apply-${id}`);
     const retargetBtn = document.getElementById(`wifi-retarget-${id}`);
+    const modeWifiRadio = document.getElementById(`wifi-mode-wifi-${id}`);
+    const modeChannelRadio = document.getElementById(`wifi-mode-channel-${id}`);
 
-    ssidEl?.addEventListener('input', (e) => this.updateWifiDraftField('ssid', e.target.value));
-    ssidEl?.addEventListener('change', (e) => this.updateWifiDraftField('ssid', e.target.value));
+    ssidEl?.addEventListener('input', (e) => { this.updateWifiDraftField('ssid', e.target.value); this.updateSsidGuard(); });
+    ssidEl?.addEventListener('change', (e) => { this.updateWifiDraftField('ssid', e.target.value); this.updateSsidGuard(); });
     passEl?.addEventListener('input', (e) => this.updateWifiDraftField('password', e.target.value));
     passEl?.addEventListener('change', (e) => this.updateWifiDraftField('password', e.target.value));
     chEl?.addEventListener('change', (e) => this.updateWifiDraftField('channel', e.target.value));
@@ -516,6 +747,18 @@ export class SettingsPanel {
       this.updateWifiDraftField('comPort', e.target.value);
       this.updateWifiRetargetState();
     });
+    modeWifiRadio?.addEventListener('change', () => {
+      if (modeWifiRadio.checked) { this.updateWifiDraftField('mode', 'wifi'); this.updateWifiUI(); }
+    });
+    modeChannelRadio?.addEventListener('change', () => {
+      if (modeChannelRadio.checked) { this.updateWifiDraftField('mode', 'channel'); this.updateWifiUI(); }
+    });
+    for (const v of [0, 1, 2]) {
+      const tierRadio = document.getElementById(`wifi-tier-${v}-${id}`);
+      tierRadio?.addEventListener('change', () => {
+        if (tierRadio.checked) this.updateWifiDraftField('edgeTier', v);
+      });
+    }
 
     refreshBtn?.addEventListener('click', () => this.fetchSerialPorts());
     testBtn?.addEventListener('click', () => this.handleWifiTestDryRun());
@@ -524,6 +767,12 @@ export class SettingsPanel {
   }
 
   createDOMStructure() {
+    const mode = this.wifiDraft.mode || 'wifi';
+    let chEff = String(this.wifiDraft.channel || 'auto');
+    if (mode === 'channel' && chEff === 'auto') chEff = 'all';
+    const dynamicIpForHint = this._actualLocalIp || this.EXPECTED_TARGET_IP;
+    const targetIpVal = this._lastHealthTargetIp || this.wifiDraft.targetIp || this._actualLocalIp || this.EXPECTED_TARGET_IP;
+    const tierSafe = [0, 1, 2].includes(Number(this.wifiDraft.edgeTier)) ? Number(this.wifiDraft.edgeTier) : 1;
     this.container.innerHTML = `
       <div class="settings-panel">
         <div class="settings-header">
@@ -539,45 +788,59 @@ export class SettingsPanel {
           <!-- WiFi Provision Section -->
           <div class="settings-section wifi-section" id="wifi-section-${this.containerId}">
             <h4>WiFi</h4>
+            <div class="setting-row" id="wifi-mode-row-${this.containerId}" style="gap:16px;margin-bottom:10px;">
+              <label style="display:flex;gap:6px;align-items:center;cursor:pointer;font-size:12px;"><input type="radio" name="wifi-mode-${this.containerId}" value="wifi" id="wifi-mode-wifi-${this.containerId}" ${mode === 'wifi' ? 'checked' : ''}> Connect WiFi</label>
+              <label style="display:flex;gap:6px;align-items:center;cursor:pointer;font-size:12px;"><input type="radio" name="wifi-mode-${this.containerId}" value="channel" id="wifi-mode-channel-${this.containerId}" ${mode === 'channel' ? 'checked' : ''}> Sniff Channel</label>
+            </div>
             <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:12px;">
               <div id="wifi-step-1-${this.containerId}" class="wifi-step-1" style="font-size:11px;line-height:1.5;color:#c8d0dc;background:rgba(15,20,35,0.8);border:1px solid rgba(56,68,89,0.4);border-left:3px solid #667eea;border-radius:6px;padding:6px 8px;"><strong style="color:#667eea;">1. USB &amp; COM</strong> — Colok USB S3 → Device Manager → Ports (COM &amp; LPT) → catat COMx (USB JTAG) → pilih di dropdown COM Port → Refresh ↻ jika tidak muncul (auto-detect).</div>
-              <div id="wifi-step-2-${this.containerId}" class="wifi-step-2" style="font-size:11px;line-height:1.5;color:#c8d0dc;background:rgba(15,20,35,0.8);border:1px solid rgba(56,68,89,0.4);border-left:3px solid #22c55e;border-radius:6px;padding:6px 8px;"><strong style="color:#22c55e;">2. Target IP</strong> — Auto <code style="background:rgba(34,197,94,0.15);padding:1px 4px;border-radius:3px;">192.168.1.75:5005</code> bind <code style="background:rgba(34,197,94,0.15);padding:1px 4px;border-radius:3px;">0.0.0.0</code> → cek badge <span style="font-size:10px;font-weight:700;padding:1px 4px;border-radius:8px;background:rgba(34,197,94,0.15);border:1px solid rgba(34,197,94,0.5);color:#4ade80;">✓ MATCH</span>/<span style="font-size:10px;font-weight:700;padding:1px 4px;border-radius:8px;background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.5);color:#f87171;">⚠ MISMATCH</span> → jika mismatch klik Re-target (butuh COM nyambung).</div>
+              <div id="wifi-step-2-${this.containerId}" class="wifi-step-2" style="font-size:11px;line-height:1.5;color:#c8d0dc;background:rgba(15,20,35,0.8);border:1px solid rgba(56,68,89,0.4);border-left:3px solid #22c55e;border-radius:6px;padding:6px 8px;"><strong style="color:#22c55e;">2. Target IP</strong> — Auto <code style="background:rgba(34,197,94,0.15);padding:1px 4px;border-radius:3px;">${dynamicIpForHint}:5005</code> bind <code style="background:rgba(34,197,94,0.15);padding:1px 4px;border-radius:3px;">0.0.0.0</code> → cek badge <span style="font-size:10px;font-weight:700;padding:1px 4px;border-radius:8px;background:rgba(34,197,94,0.15);border:1px solid rgba(34,197,94,0.5);color:#4ade80;">✓ MATCH</span>/<span style="font-size:10px;font-weight:700;padding:1px 4px;border-radius:8px;background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.5);color:#f87171;">⚠ MISMATCH</span> → jika mismatch klik Re-target (butuh COM nyambung).</div>
               <div id="wifi-step-3-${this.containerId}" class="wifi-step-3" style="font-size:11px;line-height:1.5;color:#c8d0dc;background:rgba(15,20,35,0.8);border:1px solid rgba(56,68,89,0.4);border-left:3px solid #f59e0b;border-radius:6px;padding:6px 8px;"><strong style="color:#f59e0b;">3. Test &amp; Apply</strong> — Klik Test (dry-run 8s) polling <code style="background:rgba(245,158,11,0.15);padding:1px 4px;border-radius:3px;">GET /health/health</code> cek pps&gt;0 &amp; Connected ESP 192.168.1.92 → jika PASS baru klik Apply (provision real).</div>
             </div>
-            <div class="setting-row">
+            <div class="setting-row" id="wifi-ssid-row-${this.containerId}">
               <label for="wifi-ssid-${this.containerId}">SSID:</label>
               <input type="text" id="wifi-ssid-${this.containerId}" class="setting-input setting-input-wide" placeholder="Ketik SSID WiFi..." value="${this.wifiDraft.ssid || ''}">
             </div>
-            <div class="setting-row">
+            <span id="wifi-ssid-warn-${this.containerId}" style="display:none;font-size:11px;color:#f59e0b;background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.4);border-radius:4px;padding:4px 6px;margin-bottom:8px;">⚠ ESP32-S3 hanya 2.4GHz — ganti ke FLAMBOYAN'S_EXT</span>
+            <div class="setting-row" id="wifi-password-row-${this.containerId}">
               <label for="wifi-password-${this.containerId}">Password:</label>
               <input type="password" id="wifi-password-${this.containerId}" class="setting-input setting-input-wide" placeholder="••••••••" value="${(this.wifiDraft.password || '').replace(/"/g, '&quot;')}">
             </div>
-            <div class="setting-row">
+            <div class="setting-row" id="wifi-channel-row-${this.containerId}">
               <label for="wifi-channel-${this.containerId}">Channel:</label>
               <select id="wifi-channel-${this.containerId}" class="setting-select">
-                <option value="auto" ${this.wifiDraft.channel === 'auto' ? 'selected' : ''}>auto</option>
-                <option value="1" ${String(this.wifiDraft.channel) === '1' ? 'selected' : ''}>1</option>
-                <option value="6" ${String(this.wifiDraft.channel) === '6' ? 'selected' : ''}>6</option>
-                <option value="11" ${String(this.wifiDraft.channel) === '11' ? 'selected' : ''}>11</option>
+                <option value="1" ${chEff === '1' ? 'selected' : ''}>1</option>
+                <option value="6" ${chEff === '6' ? 'selected' : ''}>6</option>
+                <option value="11" ${chEff === '11' ? 'selected' : ''}>11</option>
+                <option value="all" ${chEff === 'all' ? 'selected' : ''}>Semua (hop)</option>
               </select>
             </div>
-            <div class="setting-row">
+            <div class="setting-row" id="wifi-hop-row-${this.containerId}">
               <label for="wifi-hop-${this.containerId}">Hop:</label>
               <input type="checkbox" id="wifi-hop-${this.containerId}" class="setting-checkbox" ${this.wifiDraft.hop ? 'checked' : ''}>
               <span style="font-size:11px;color:#8899aa;flex:0 0 auto;">Channel hop</span>
             </div>
-            <div class="setting-row">
+            <div class="setting-row" id="wifi-target-ip-row-${this.containerId}">
               <label for="wifi-target-ip-${this.containerId}">Target IP:</label>
-              <input type="text" id="wifi-target-ip-${this.containerId}" class="setting-input" value="${this.wifiDraft.targetIp || this.EXPECTED_TARGET_IP}" readonly title="Auto laptop IP">
+              <input type="text" id="wifi-target-ip-${this.containerId}" class="setting-input" value="${targetIpVal}" readonly title="Auto laptop IP">
               <span id="wifi-match-badge-${this.containerId}" class="badge badge-match" style="display:none;">✓ MATCH</span>
               <span id="wifi-mismatch-badge-${this.containerId}" class="badge badge-mismatch" style="display:none;">⚠ MISMATCH</span>
             </div>
-            <div class="setting-row">
+            <div id="wifi-live-bar-${this.containerId}" style="font-size:11px;font-family:monospace;padding:4px 8px;border-radius:6px;border:1px solid rgba(56,68,89,0.3);background:rgba(15,20,35,0.4);color:#6b7a8d;margin-bottom:8px;min-height:18px;">pps -- | var -- | presence --</div>
+            <div class="setting-row" id="wifi-com-port-row-${this.containerId}">
               <label for="wifi-com-port-${this.containerId}">COM Port:</label>
               <select id="wifi-com-port-${this.containerId}" class="setting-select">
                 <option value="">-- pilih COM --</option>
               </select>
               <button class="btn btn-sm" id="wifi-refresh-ports-${this.containerId}" title="Refresh COM list">↻</button>
+            </div>
+            <div class="setting-row" id="wifi-sensing-mode-row-${this.containerId}" style="flex-wrap:wrap;">
+              <label style="font-size:12px;opacity:0.9;" title="Hemat=hemat WiFi, Responsif=beban WiFi naik">Sensing Mode</label>
+              <div style="display:flex;gap:10px;flex-wrap:wrap;" title="Hemat=hemat WiFi, Responsif=beban WiFi naik">
+                <label style="display:flex;gap:4px;align-items:center;cursor:pointer;font-size:12px;" title="Hemat=hemat WiFi, Responsif=beban WiFi naik"><input type="radio" name="wifi-edge-tier-${this.containerId}" value="0" id="wifi-tier-0-${this.containerId}" ${tierSafe === 0 ? 'checked' : ''}> Hemat <span style="opacity:0.6;font-size:11px;">pps ~1</span></label>
+                <label style="display:flex;gap:4px;align-items:center;cursor:pointer;font-size:12px;" title="Hemat=hemat WiFi, Responsif=beban WiFi naik"><input type="radio" name="wifi-edge-tier-${this.containerId}" value="1" id="wifi-tier-1-${this.containerId}" ${tierSafe === 1 ? 'checked' : ''}> Seimbang* <span style="opacity:0.6;font-size:11px;">pps ~5</span></label>
+                <label style="display:flex;gap:4px;align-items:center;cursor:pointer;font-size:12px;" title="Hemat=hemat WiFi, Responsif=beban WiFi naik"><input type="radio" name="wifi-edge-tier-${this.containerId}" value="2" id="wifi-tier-2-${this.containerId}" ${tierSafe === 2 ? 'checked' : ''}> Responsif <span style="opacity:0.6;font-size:11px;">pps ~15</span></label>
+              </div>
             </div>
             <div class="setting-row wifi-actions" style="gap:8px; flex-wrap:wrap;">
               <button class="btn btn-sm" id="wifi-test-${this.containerId}">Test (dry-run)</button>
@@ -1465,8 +1728,8 @@ export class SettingsPanel {
         password: this.wifiDraft.password,
         channel: this.wifiDraft.channel === 'auto' ? null : Number(this.wifiDraft.channel),
         hop: !!this.wifiDraft.hop,
-        targetIp: this.wifiDraft.targetIp || this.EXPECTED_TARGET_IP,
-        target_ip: this.wifiDraft.targetIp || this.EXPECTED_TARGET_IP,
+        targetIp: this.wifiDraft.targetIp || this._actualLocalIp || this.EXPECTED_TARGET_IP,
+        target_ip: this.wifiDraft.targetIp || this._actualLocalIp || this.EXPECTED_TARGET_IP,
         comPort: this.wifiDraft.comPort,
         port: this.wifiDraft.comPort
       };
@@ -1534,6 +1797,7 @@ export class SettingsPanel {
   // Cleanup
   dispose() {
     this.logger.info('Disposing SettingsPanel component');
+    if (this._livePollTimer) { clearInterval(this._livePollTimer); this._livePollTimer = null; }
     
     try {
       // Save settings before disposing

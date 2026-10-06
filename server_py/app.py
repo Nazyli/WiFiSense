@@ -37,6 +37,29 @@ from . import csi_ingest
 log = logging.getLogger("server_py")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
+from collections import deque
+
+LOG_BUFFER: deque = deque(maxlen=300)
+
+
+class MemoryHandler(logging.Handler):
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            LOG_BUFFER.append(
+                {
+                    "ts": int(time.time() * 1000),
+                    "level": record.levelname,
+                    "logger": record.name,
+                    "msg": record.getMessage(),
+                }
+            )
+        except Exception:
+            pass
+
+
+logging.getLogger().addHandler(MemoryHandler(level=logging.INFO))
+log.addHandler(MemoryHandler(level=logging.INFO))
+
 # --- paths ---
 ROOT = Path(__file__).resolve().parent.parent
 UI_DIR = ROOT / "web" / "ui"
@@ -50,6 +73,9 @@ UDP_PORT = int(os.getenv("UDP_PORT", "5005"))
 ENABLE_UDP = os.getenv("ENABLE_UDP", "1") not in ("0", "false", "False")
 ENABLE_SECONDARY = os.getenv("ENABLE_SECONDARY_PROXY", "1") not in ("0", "false", "False")
 SECONDARY_PORT = int(os.getenv("SECONDARY_PROXY_PORT", "3001"))
+ENABLE_SERIAL = os.getenv("ENABLE_SERIAL", "0") not in ("0", "false", "False")
+SERIAL_PORT = os.getenv("SERIAL_PORT", "COM4")
+SERIAL_BAUD = int(os.getenv("SERIAL_BAUD", "115200"))
 
 app = FastAPI(title="WiFiSense Python shim", version="0.8.8-py")
 
@@ -98,7 +124,11 @@ def _health_payload():
     latest = csi_ingest.get_latest()
     vitals = csi_ingest.get_vitals()
     live = csi_ingest.is_live()
-    source = "esp32" if live else "simulated"
+    # source = 'serial' bila last frame dari serial, else esp32/simulated
+    if stats.get("source") == "serial":
+        source = "serial"
+    else:
+        source = "esp32" if live else "simulated"
     # provision network info (ssid/targetIp from NVS or COM4.json fallback)
     try:
         ssid = csi_ingest.get_ssid()
@@ -149,7 +179,7 @@ def _health_payload():
         "breathingBpm": vitals.get("breathingBpm"),
         "heartBpm": vitals.get("heartBpm"),
         # FE DashboardTab expects components + metrics agar tidak undefined
-        "components": {"api": "healthy", "csi": csi_status},
+        "components": {"api": {"status": "healthy", "message": "API server is running normally"}, "csi": {"status": csi_status, "message": "CSI " + csi_status}},
         "metrics": {"pps": pps, "packets": packets},
     }
 
@@ -725,6 +755,21 @@ def _sync_nvs_csv(fields: Dict[str, Any]) -> None:
         log.debug("sync nvs csv outer failed: %s", e)
 
 
+def _serial_stop():
+    try:
+        csi_ingest.stop_serial_reader()
+    except Exception as e:
+        log.debug("serial stop failed: %s", e)
+
+
+def _serial_start():
+    try:
+        if ENABLE_SERIAL:
+            csi_ingest.start_serial_reader(SERIAL_PORT, SERIAL_BAUD)
+    except Exception as e:
+        log.debug("serial start failed: %s", e)
+
+
 class ConfigTestRequest(BaseModel):
     ssid: Optional[str] = None
     password: Optional[str] = None
@@ -837,12 +882,36 @@ async def config_test(body: ConfigTestRequest):
     # normalize hopChannels alias
     if data.get("hop_channels") and not data.get("hopChannels"):
         data["hopChannels"] = data.get("hop_channels")
+    # mode handling (channel vs wifi)
+    mode_raw = str(data.get("mode") or "").strip().lower()
+    if mode_raw in ("wifi", "channel"):
+        mode = mode_raw
+    else:
+        ssid_val = str(data.get("ssid") or "").strip()
+        has_ch = data.get("channel") is not None and str(data.get("channel")).strip() != ""
+        hop = data.get("hopChannels") or data.get("hop_channels")
+        has_hop = hop is not None and str(hop).strip() != ""
+        if not ssid_val and (has_ch or has_hop):
+            mode = "channel"
+        else:
+            mode = "wifi"
+    try:
+        csi_ingest.set_ingest_mode(mode)
+    except Exception:
+        pass
     # build provision dry-run args
     prov_args = _build_provision_args_from_body(data, include_dry_run=True)
     # ensure --port present
     if "--port" not in prov_args:
         prov_args = ["--port", str(port)] + prov_args
+    # COM exclusivity: stop serial before provision
+    _serial_stop()
     result = _run_provision(prov_args, timeout=30)
+    # restart serial (best-effort)
+    try:
+        _serial_start()
+    except Exception:
+        pass
     if not result.get("ok"):
         reason = (result.get("stderr") or result.get("stdout") or "provision dry-run gagal")[:800]
         return JSONResponse({"ok": False, "reason": reason, "detail": result})
@@ -870,6 +939,9 @@ async def config_test(body: ConfigTestRequest):
 
 
 @app.post("/api/v1/config/apply")
+@app.post("/api/v1/config/provision")
+@app.post("/api/v1/config/wifi")
+@app.post("/api/v1/serial/provision")
 async def config_apply(body: ConfigApplyRequest):
     data = body.model_dump(by_alias=False) if hasattr(body, "model_dump") else body.dict()  # type: ignore
     if hasattr(body, "model_extra") and body.model_extra:
@@ -882,6 +954,23 @@ async def config_apply(body: ConfigApplyRequest):
     data["port"] = port
     if data.get("hop_channels") and not data.get("hopChannels"):
         data["hopChannels"] = data.get("hop_channels")
+    # mode handling
+    mode_raw = str(data.get("mode") or "").strip().lower()
+    if mode_raw in ("wifi", "channel"):
+        mode = mode_raw
+    else:
+        ssid_val = str(data.get("ssid") or "").strip()
+        has_ch = data.get("channel") is not None and str(data.get("channel")).strip() != ""
+        hop = data.get("hopChannels") or data.get("hop_channels")
+        has_hop = hop is not None and str(hop).strip() != ""
+        if not ssid_val and (has_ch or has_hop):
+            mode = "channel"
+        else:
+            mode = "wifi"
+    try:
+        csi_ingest.set_ingest_mode(mode)
+    except Exception:
+        pass
     prov_args = _build_provision_args_from_body(data, include_dry_run=False)
     if "--port" not in prov_args:
         prov_args = ["--port", str(port)] + prov_args
@@ -890,12 +979,22 @@ async def config_apply(body: ConfigApplyRequest):
     has_cfg = any(k in prov_args for k in ("--ssid", "--password", "--target-ip", "--channel", "--hop-channels"))
     if not has_cfg:
         prov_args += ["--force-partial"]
+    # COM exclusivity
+    _serial_stop()
     result = _run_provision(prov_args, timeout=45)
     if not result.get("ok"):
         reason = (result.get("stderr") or result.get("stdout") or "provision gagal")[:800]
+        try:
+            _serial_start()
+        except Exception:
+            pass
         return JSONResponse({"ok": False, "reason": reason, "detail": result})
-    # RESET via esptool run (best-effort)
+    # RESET via esptool run (best-effort) — keep serial closed during reset
     reset_res = _esptool_reset(str(port))
+    try:
+        _serial_start()
+    except Exception:
+        pass
     # sync nvs_config.csv agar health/targetIp langsung sinkron (untuk TestClient & UI badge)
     try:
         sync_fields: Dict[str, Any] = {}
@@ -945,11 +1044,20 @@ async def config_retarget(body: Optional[ReTargetRequest] = None):
     if not port:
         return JSONResponse({"ok": False, "reason": "mismatch terdeteksi tapi tidak ada COM port (colok ESP & coba lagi)", "localIp": local_ip, "targetIp": target_ip, "mismatch": True}, status_code=400)
     prov_args = ["--port", str(port), "--target-ip", str(local_ip), "--force-partial"]
+    _serial_stop()
     result = _run_provision(prov_args, timeout=30)
     if not result.get("ok"):
         reason = (result.get("stderr") or result.get("stdout") or "provision re-target gagal")[:800]
+        try:
+            _serial_start()
+        except Exception:
+            pass
         return JSONResponse({"ok": False, "reason": reason, "localIp": local_ip, "targetIp": target_ip, "mismatch": True, "detail": result, "port": port})
     reset_res = _esptool_reset(str(port))
+    try:
+        _serial_start()
+    except Exception:
+        pass
     # sync csv agar mismatch badge hilang
     try:
         _sync_nvs_csv({"target_ip": local_ip})
@@ -963,10 +1071,34 @@ async def config_retarget(body: Optional[ReTargetRequest] = None):
     return JSONResponse({"ok": True, "localIp": local_ip, "previousTargetIp": target_ip, "targetIp": new_target, "mismatch": (local_ip != new_target), "port": port, "provision": result, "reset": reset_res})
 
 
+# --- server logs buffer endpoint ---
+@app.get("/api/v1/logs")
+@app.get("/logs")
+@app.get("/api/logs")
+async def get_logs(limit: int = 100, level: Optional[str] = None):
+    try:
+        lim = int(limit)
+    except Exception:
+        lim = 100
+    lim = max(1, min(300, lim))
+    logs = list(LOG_BUFFER)
+    if level:
+        lvl = str(level).strip().upper()
+        if lvl:
+            logs = [x for x in logs if str(x.get("level", "")).upper() == lvl]
+    sliced = logs[-lim:] if len(logs) > lim else logs
+    return JSONResponse({"logs": sliced, "total": len(LOG_BUFFER)})
+
+
 # generic fallback for any other /api/v1/* that UI may poll — avoid 404 spam
 @app.get("/api/v1/{path:path}")
 async def api_v1_fallback(path: str):
     return JSONResponse({"status": "ok", "stub": True, "path": f"/api/v1/{path}", "note": "python-shim stub (hemat, tanpa training)"})
+
+
+@app.post("/api/v1/{path:path}")
+async def api_v1_fallback_post(path: str):
+    return JSONResponse({"detail": "Not Found"}, status_code=404)
 
 @app.get("/oauth/{path:path}")
 async def oauth_fallback(path: str):
@@ -1132,6 +1264,18 @@ async def on_startup():
     else:
         log.info("UDP disabled via ENABLE_UDP=0 - running in simulated mode only")
 
+    if ENABLE_SERIAL:
+        try:
+            # sync call is OK (threaded reader, don't block event loop)
+            reader = csi_ingest.start_serial_reader(SERIAL_PORT, SERIAL_BAUD)
+            app.state.serial_reader = reader
+            log.info("[SERIAL] startup reader %s @%d -> %s", SERIAL_PORT, SERIAL_BAUD, "ok" if reader else "disabled (no pyserial)")
+        except Exception as e:
+            log.error("[SERIAL] startup failed: %s", e)
+            app.state.serial_reader = None
+    else:
+        log.info("Serial sniff disabled (ENABLE_SERIAL=0)")
+
     # Secondary WS proxy on 3001 for sensing.service mapping (3000->3001)
     if ENABLE_SECONDARY:
         # Only spawn if main port looks like 3000 (heuristic: env PORT or default 3000)
@@ -1208,6 +1352,11 @@ async def _start_secondary_proxy():
 
 @app.on_event("shutdown")
 async def on_shutdown():
+    # stop serial reader
+    try:
+        csi_ingest.stop_serial_reader()
+    except Exception:
+        pass
     # close UDP
     tr = getattr(app.state, "udp_transport", None)
     if tr:
