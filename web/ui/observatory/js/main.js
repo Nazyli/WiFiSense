@@ -133,6 +133,11 @@ class Observatory {
     this._liveData = null;
     this._autoDetectLive();
 
+    // Server log panel
+    this._logBase = null;
+    this._logTimer = null;
+    this._initLogPanel();
+
     // Input
     this._initKeyboard();
     this._hud.initSettings();
@@ -456,11 +461,12 @@ class Observatory {
       fetch(`${base}/health`, { signal: AbortSignal.timeout(1500) })
         .then(r => r.ok ? r.json() : Promise.reject())
         .then(data => {
-          if (data && data.status === 'ok') {
+          if (data && (data.ok === true || ['ok','healthy','degraded'].includes(data.status))) {
             const wsProto = base.startsWith('https') ? 'wss:' : 'ws:';
             const urlObj = new URL(base);
             const wsUrl = `${wsProto}//${urlObj.host}/ws/sensing`;
             console.log('[Observatory] Sensing server detected at', base, '→', wsUrl);
+            this._logBase = base;
             this.settings.dataSource = 'ws';
             this.settings.wsUrl = wsUrl;
             void this._connectWS(wsUrl);
@@ -498,6 +504,73 @@ class Observatory {
   _disconnectWS() {
     if (this._ws) { this._ws.close(); this._ws = null; }
     this._liveData = null;
+  }
+
+  _getLogBase() {
+    if (this._logBase) return this._logBase;
+    // reuse base from autoDetect: window.location.origin is primary candidate
+    return window.location.origin;
+  }
+
+  async _fetchLogs() {
+    const body = document.getElementById('obs-log-body');
+    if (!body) return;
+    const base = this._getLogBase();
+    try {
+      const r = await fetch(`${base}/api/v1/logs?limit=120`, { signal: AbortSignal.timeout(2000) });
+      const j = await r.json().catch(() => null);
+      if (!r.ok || !j) throw new Error('no json');
+      if (j.stub === true) {
+        body.textContent = 'Log endpoint not available (restart shim)';
+        return;
+      }
+      const logs = j.logs || j.entries || [];
+      if (!Array.isArray(logs) || logs.length === 0) {
+        body.textContent = logs.length === 0 ? '(no logs yet — waiting for server events)' : 'Log endpoint not available (restart shim)';
+        if (logs.length === 0 && (j.total === 0 || j.total === undefined)) {
+          // keep placeholder
+        }
+        if (logs.length === 0) return;
+      }
+      const lines = logs.map(e => {
+        const ts = e.ts || e.timestamp || Date.now();
+        const d = new Date(ts);
+        const hh = String(d.getHours()).padStart(2, '0');
+        const mm = String(d.getMinutes()).padStart(2, '0');
+        const ss = String(d.getSeconds()).padStart(2, '0');
+        const lvl = (e.level || e.lvl || 'INFO').padEnd(5, ' ');
+        const msg = e.msg || e.message || e.text || JSON.stringify(e);
+        return `[${hh}:${mm}:${ss} ${lvl}] ${msg}`;
+      });
+      body.textContent = lines.join('\n');
+      body.scrollTop = body.scrollHeight;
+    } catch (err) {
+      body.textContent = 'Log endpoint not available (restart shim)';
+    }
+  }
+
+  _initLogPanel() {
+    // defer to next tick to ensure DOM ready and autoDetect base resolved
+    const setup = () => {
+      // capture base from autoDetect candidates (window.location.origin)
+      this._logBase = window.location.origin;
+      const btnR = document.getElementById('obs-log-refresh');
+      const btnC = document.getElementById('obs-log-clear');
+      const body = document.getElementById('obs-log-body');
+      if (btnR) btnR.addEventListener('click', () => this._fetchLogs());
+      if (btnC) btnC.addEventListener('click', () => { if (body) body.textContent = ''; });
+      // initial fetch
+      this._fetchLogs();
+      // poll every 5s when live (and generally while page visible)
+      if (this._logTimer) clearInterval(this._logTimer);
+      this._logTimer = setInterval(() => this._fetchLogs(), 5000);
+    };
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', setup);
+    } else {
+      // small delay to allow _autoDetectLive to set wsUrl if needed
+      setTimeout(setup, 600);
+    }
   }
 
   // ========================================
